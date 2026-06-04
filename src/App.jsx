@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import DATA from "./data/history.json";
 import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList, Legend } from "recharts";
 
@@ -13,6 +13,75 @@ const hms = (s) => {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
 };
+
+/* ---------- live 2026 feed ----------
+   Source: Tulospalvelu "online" JSON, CORS-open (access-control-allow-origin: *),
+   so the static site fetches it directly — no backend.
+   Confirmed endpoints + JSON schema (from the event's JsonFileFormats):
+     online_events_dt.json                 -> events list w/ CurrentRace + Online flags
+     online_{id}_startlist.json?ClubNameShort=  -> team + per-leg runner names
+     online_{id}_resultlist.json?Get=[...] -> OLBigRelayResult rows (live splits)
+     online_{id}_statuslist.json?a=ts      -> live change/refresh feed
+   Rows we read (OLBigRelayResult): RaceNo, Point, BaseBib, Name, TimeTotalStr,
+     RankTotal, DiffTotal, TimeRaceStr, RankRace, DiffRace.
+   NOTE: endpoints are empty until the race is live + lineups posted. The two
+   spots marked CONFIRM-WHEN-LIVE (class filter + result wrapper) are isolated
+   here so finalising them is a one-line change once real data appears. */
+const LIVE = {
+  base: "https://online.jukola.fi/tulokset/online",
+  eventId: "j2026_ju",
+  bib: 1107,
+  club: "Olvastin Tana",
+  legs: 7,
+  massStart: "2026-06-13T23:00:00+03:00",
+  refreshMs: 75000,
+  resultsUrl: "https://online.jukola.fi/tulokset-new/fi/j2026_ju/",
+};
+
+async function getJSON(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return r.json();
+}
+
+async function fetchEvent() {
+  const d = await getJSON(`${LIVE.base}/online_events_dt.json`);
+  return (d.data || []).find((e) => e.EventID === LIVE.eventId) || null;
+}
+
+async function fetchLineup() {
+  const d = await getJSON(`${LIVE.base}/online_${LIVE.eventId}_startlist.json?ClubNameShort=${encodeURIComponent(LIVE.club)}`);
+  const teams = d.data || [];
+  const team = teams.find((t) => String(t.BaseBib ?? t.Bib) === String(LIVE.bib)) || teams[0] || null;
+  if (!team) return null;
+  // CONFIRM-WHEN-LIVE: per-leg runner shape (expected team.Races[] of OLRelayCompetitorRace)
+  const races = (team.Races || [])
+    .map((r) => ({ leg: r.RaceNo, name: [r.NameFirst, r.NameLast].filter(Boolean).join(" ").trim(), status: r.Status }))
+    .filter((r) => r.leg)
+    .sort((a, b) => a.leg - b.leg);
+  return { bib: team.BaseBib ?? team.Bib, classId: team.ClassID, classShort: team.ClassNameShort, races };
+}
+
+async function fetchTeamStatus(classShort) {
+  // CONFIRM-WHEN-LIVE: exact class filter + that rows live under d.data
+  let url = `${LIVE.base}/online_${LIVE.eventId}_resultlist.json?a=${Date.now()}&Get=${encodeURIComponent('["OLBigRelayResult"]')}`;
+  if (classShort) url += `&ClassNameShort=${encodeURIComponent(classShort)}`;
+  const d = await getJSON(url);
+  const rows = (d.data || []).filter((r) => String(r.BaseBib) === String(LIVE.bib));
+  if (!rows.length) return null;
+  rows.sort((a, b) => a.RaceNo - b.RaceNo || a.Point - b.Point);
+  const latest = rows[rows.length - 1];
+  const byLeg = {};
+  rows.forEach((r) => { byLeg[r.RaceNo] = r; });
+  return {
+    leg: latest.RaceNo, runner: latest.Name, point: latest.Point,
+    totalTime: latest.TimeTotalStr, rankTotal: latest.RankTotal, diffTotal: latest.DiffTotal,
+    legTime: latest.TimeRaceStr, rankRace: latest.RankRace, diffRace: latest.DiffRace,
+    legs: Object.values(byLeg),
+  };
+}
+
+const isLiveNow = (ev) => !!ev && (ev.Online === true || (typeof ev.CurrentRace === "number" && ev.CurrentRace > 0));
 
 /* ---------- derived data ---------- */
 function useModel() {
@@ -81,7 +150,7 @@ const Stat = ({ k, v, sub }) => (
   </div>
 );
 
-function CourseLine({ events, onPick }) {
+function CourseLine({ events, onPick, onLive }) {
   return (
     <div className="course">
       <svg className="course-route" preserveAspectRatio="none" viewBox="0 0 1000 60">
@@ -95,11 +164,11 @@ function CourseLine({ events, onPick }) {
           <span className="control-meta">{e.status === "finished" ? e.final_time : "DNF"}</span>
         </button>
       ))}
-      <div className="control next" title="Kotka-Jukola 2026">
+      <button className="control next" title="Follow Kotka-Jukola 2026 live" onClick={onLive}>
         <span className="control-ring pulse" />
         <span className="control-year">2026</span>
-        <span className="control-meta">#1107</span>
-      </div>
+        <span className="control-meta">LIVE</span>
+      </button>
     </div>
   );
 }
@@ -135,7 +204,7 @@ function Home({ m, go }) {
       <section className="panel">
         <h2 className="h2">The course so far</h2>
         <p className="muted">Each control is a year. Tap one to open the night.</p>
-        <CourseLine events={m.events} onPick={(y) => go({ type: "event", year: y })} />
+        <CourseLine events={m.events} onPick={(y) => go({ type: "event", year: y })} onLive={() => go({ type: "live" })} />
       </section>
 
       <section className="panel">
@@ -336,6 +405,149 @@ function Profile({ pkey, m, go }) {
   );
 }
 
+function useCountdown(targetIso) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const diff = Math.max(0, new Date(targetIso).getTime() - now);
+  const d = Math.floor(diff / 86400000);
+  const h = Math.floor((diff % 86400000) / 3600000);
+  const mn = Math.floor((diff % 3600000) / 60000);
+  const s = Math.floor((diff % 60000) / 1000);
+  return { d, h, mn, s, done: diff === 0 };
+}
+
+function LiveView() {
+  const [phase, setPhase] = useState("loading"); // loading | pre | live | error
+  const [lineup, setLineup] = useState(null);
+  const [status, setStatus] = useState(null);
+  const [updated, setUpdated] = useState(null);
+  const [err, setErr] = useState(null);
+  const busy = useRef(false);
+  const cd = useCountdown(LIVE.massStart);
+
+  async function load() {
+    if (busy.current) return;
+    busy.current = true;
+    try {
+      const ev = await fetchEvent();
+      let lu = null;
+      try { lu = await fetchLineup(); } catch { /* lineup optional */ }
+      setLineup(lu);
+      if (isLiveNow(ev)) {
+        let st = null;
+        try { st = await fetchTeamStatus(lu?.classShort); } catch { /* may not be ready */ }
+        setStatus(st);
+        setPhase("live");
+      } else {
+        setPhase("pre");
+      }
+      setUpdated(new Date());
+      setErr(null);
+    } catch (e) {
+      setErr(String(e.message || e));
+      setPhase((p) => (p === "loading" ? "error" : p));
+    } finally {
+      busy.current = false;
+    }
+  }
+
+  useEffect(() => {
+    load();
+    const t = setInterval(load, LIVE.refreshMs);
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div className="stack">
+      <section className="hero compact live-hero">
+        <div className="contour" aria-hidden>
+          <svg viewBox="0 0 600 400" preserveAspectRatio="xMidYMid slice">
+            {[...Array(7)].map((_, i) => <ellipse key={i} cx="430" cy="120" rx={60 + i * 38} ry={40 + i * 26} />)}
+          </svg>
+        </div>
+        <p className="eyebrow">
+          <span className={`live-dot ${phase === "live" ? "on" : ""}`} /> Kotka-Jukola 2026 · team {LIVE.bib}
+        </p>
+        <h1 className="title sm">{phase === "live" ? "LIVE NOW" : "Starting line"}</h1>
+        {phase !== "live" && (
+          <div className="countdown">
+            {[["days", cd.d], ["hrs", cd.h], ["min", cd.mn], ["sec", cd.s]].map(([k, v]) => (
+              <div className="cd" key={k}><div className="cd-v mono">{String(v).padStart(2, "0")}</div><div className="cd-k">{k}</div></div>
+            ))}
+          </div>
+        )}
+        <p className="lede" style={{ marginTop: 16 }}>
+          {phase === "live"
+            ? "Following Olvastin Tana through the night — splits update as each runner passes a timing point."
+            : "Jukola mass start: Saturday 13 June, 23:00. This page will switch to live tracking automatically when the gun goes."}
+        </p>
+      </section>
+
+      {phase === "live" && status && (
+        <section className="panel">
+          <h2 className="h2">On the course</h2>
+          <div className="live-now">
+            <div className="ln-leg mono">LEG {status.leg}/{LIVE.legs}</div>
+            <div className="ln-runner">{status.runner || "—"}</div>
+            <div className="ln-grid">
+              <div><span className="ln-k">Total time</span><span className="ln-v mono">{status.totalTime || "—"}</span></div>
+              <div><span className="ln-k">Position</span><span className="ln-v mono">{status.rankTotal ?? "—"}</span></div>
+              <div><span className="ln-k">Gap to leader</span><span className="ln-v mono">{status.diffTotal || "—"}</span></div>
+              <div><span className="ln-k">Last point</span><span className="ln-v mono">{status.point ?? "—"}</span></div>
+            </div>
+          </div>
+          {status.legs && status.legs.length > 0 && (
+            <div className="legs" style={{ marginTop: 14 }}>
+              {status.legs.map((l) => (
+                <div className="leg" key={l.RaceNo}>
+                  <div className="leg-no mono">{l.RaceNo}</div>
+                  <div className="leg-runner" style={{ cursor: "default" }}>{l.Name || "—"}</div>
+                  <div className="leg-time mono">{l.TimeRaceStr || "—"}</div>
+                  <div className="leg-rank mono muted">{l.RankRace ? `#${l.RankRace}` : "—"}</div>
+                  <div className="leg-cum mono">{l.TimeTotalStr || "—"}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {phase === "live" && !status && (
+        <section className="panel"><p className="muted">Race is live — waiting for Olvastin Tana's first timing point to come through.</p></section>
+      )}
+
+      <section className="panel">
+        <div className="row-between">
+          <h2 className="h2">{phase === "live" ? "Lineup" : "Registered lineup"}</h2>
+          {updated && <span className="muted small mono">updated {updated.toLocaleTimeString()}</span>}
+        </div>
+        {lineup && lineup.races.length > 0 ? (
+          <div className="legs">
+            {lineup.races.map((r) => (
+              <div className="leg" key={r.leg}>
+                <div className="leg-no mono">{r.leg}</div>
+                <div className="leg-runner" style={{ cursor: "default" }}>{r.name || "—"}</div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="muted">Lineup isn't published in the results system yet — it usually appears a few days before the race. This panel will fill in automatically once it's up.</p>
+        )}
+      </section>
+
+      {err && <section className="panel"><p className="muted small">Couldn't reach the live service just now ({err}). Retrying automatically every {Math.round(LIVE.refreshMs / 1000)}s.</p></section>}
+
+      <p className="muted small" style={{ textAlign: "center" }}>
+        Live data = split times at timing points and changeovers (not GPS), straight from{" "}
+        <a href={LIVE.resultsUrl} target="_blank" rel="noreferrer" style={{ color: "var(--magenta)" }}>online.jukola.fi</a>. Auto-refreshes every {Math.round(LIVE.refreshMs / 1000)}s.
+      </p>
+    </div>
+  );
+}
+
 /* ---------- shell ---------- */
 export default function App() {
   const m = useModel();
@@ -350,15 +562,19 @@ export default function App() {
           <span className="brand-mark" />
           <span className="brand-txt">OLVASTIN&nbsp;TANA</span>
         </button>
-        <span className="brand-sub mono">JUKOLA · 2014–2026</span>
+        <nav className="nav">
+          <button className={`nav-btn ${view.type === "home" ? "act" : ""}`} onClick={() => go({ type: "home" })}>History</button>
+          <button className={`nav-btn live ${view.type === "live" ? "act" : ""}`} onClick={() => go({ type: "live" })}>● Live 2026</button>
+        </nav>
       </header>
       <main className="wrap">
         {view.type === "home" && <Home m={m} go={go} />}
         {view.type === "event" && <EventView year={view.year} m={m} go={go} />}
         {view.type === "profile" && <Profile pkey={view.key} m={m} go={go} />}
+        {view.type === "live" && <LiveView />}
       </main>
       <footer className="foot mono">
-        Data: results.jukola.com · Next control → Kotka-Jukola, 13 June 2026, team 1107
+        Data: results.jukola.com · Live: online.jukola.fi · Kotka-Jukola, 13 June 2026, team 1107
       </footer>
     </div>
   );
@@ -390,6 +606,27 @@ function Style() {
 .brand-mark{width:16px;height:16px;border-radius:50%;border:3px solid var(--magenta);box-shadow:0 0 14px rgba(255,46,147,.6)}
 .brand-txt{font-family:var(--disp);font-weight:800;letter-spacing:.06em;font-size:15px}
 .brand-sub{font-size:11px;color:var(--muted);letter-spacing:.12em}
+.nav{display:flex;gap:6px;align-items:center}
+.nav-btn{background:none;border:1px solid transparent;border-radius:999px;color:var(--muted);font-family:var(--mono);font-size:12px;padding:6px 12px;cursor:pointer}
+.nav-btn:hover{color:var(--ink)}
+.nav-btn.act{color:var(--ink);border-color:var(--hair);background:rgba(255,255,255,.04)}
+.nav-btn.live{color:var(--amber)}
+.nav-btn.live.act{border-color:rgba(255,194,75,.4);background:rgba(255,194,75,.08)}
+.live-hero{border-color:rgba(255,194,75,.25)}
+.live-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);margin-right:6px;vertical-align:middle}
+.live-dot.on{background:var(--magenta);box-shadow:0 0 0 0 rgba(255,46,147,.6);animation:pulse 1.6s infinite}
+.countdown{display:flex;gap:10px;margin-top:22px;position:relative}
+.cd{background:rgba(0,0,0,.22);border:1px solid var(--hair);border-radius:12px;padding:12px 16px;min-width:64px;text-align:center}
+.cd-v{font-family:var(--disp);font-weight:800;font-size:30px;line-height:1;color:var(--amber)}
+.cd-k{font-size:10px;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);margin-top:6px}
+.live-now{background:rgba(255,46,147,.06);border:1px solid rgba(255,46,147,.25);border-radius:14px;padding:18px}
+.ln-leg{font-size:12px;color:var(--magenta);letter-spacing:.1em}
+.ln-runner{font-family:var(--disp);font-weight:800;font-size:26px;margin:4px 0 14px}
+.ln-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.ln-grid>div{display:flex;flex-direction:column;gap:3px}
+.ln-k{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+.ln-v{font-size:18px}
+@media(max-width:560px){.ln-grid{grid-template-columns:repeat(2,1fr)}.countdown{gap:7px}.cd{min-width:0;flex:1;padding:10px 6px}}
 .wrap{max-width:880px;margin:0 auto;padding:22px 18px 10px}
 .stack{display:flex;flex-direction:column;gap:18px}
 .panel{background:linear-gradient(180deg,var(--panel),rgba(14,24,18,.6));border:1px solid var(--hair);border-radius:18px;padding:22px}
