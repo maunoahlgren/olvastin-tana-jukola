@@ -2,7 +2,7 @@ import React, { useState, useMemo, useEffect, useRef } from "react";
 import DATA from "./data/history.json";
 import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList, Legend } from "recharts";
 
-const LOGO = "data:image/png;base64,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";
+const LOGO = "data:image/png;base64,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";
 
 
 
@@ -10,6 +10,9 @@ const LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGMAAACMBAMAAACaBwrx
 const stripAccents = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 const normName = (n) => stripAccents(n).toLowerCase().trim();
 const shortComp = (c) => (c || "").split(",")[0];
+const topPct = (x) => (x == null ? "—" : "top " + Math.round(x * 100) + "%");
+const fmtPace = (s) => (s ? `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}` : "—");
+const km = (v) => (v == null ? "—" : `${v.toFixed(1)} km`);
 const hms = (s) => {
   if (s == null) return "—";
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
@@ -110,6 +113,7 @@ function useModel() {
         year: e.year, competition: e.competition, status: e.status,
         leg: l.leg, leg_time: l.leg_time, leg_time_s: l.leg_time_s, official: l.official,
         leg_rank: l.leg_rank, leg_field: l.leg_field, cumulative_place: l.cumulative_place,
+        distance_km: l.distance_km,
       });
     }));
     const participants = Object.values(map).map((p) => {
@@ -121,7 +125,14 @@ function useModel() {
       const legCount = {};
       entries.forEach((e) => (legCount[e.leg] = (legCount[e.leg] || 0) + 1));
       const favLeg = Object.entries(legCount).sort((a, b) => b[1] - a[1])[0][0];
-      return { ...p, display, entries, appearances: entries.length, years: new Set(entries.map((e) => e.year)).size, fastest, bestLeg, favLeg };
+      const placed = entries.filter((e) => e.leg_rank && e.leg_field);
+      const avgPct = placed.length ? placed.reduce((s, e) => s + e.leg_rank / e.leg_field, 0) / placed.length : null;
+      const bestPct = placed.reduce((m, e) => (!m || e.leg_rank / e.leg_field < m.leg_rank / m.leg_field ? e : m), null);
+      const distLegs = entries.filter((e) => e.official && e.leg_time_s && e.distance_km);
+      const totalKm = distLegs.reduce((s, e) => s + e.distance_km, 0);
+      const avgKm = distLegs.length ? totalKm / distLegs.length : 0;
+      const paceS = totalKm ? distLegs.reduce((s, e) => s + e.leg_time_s, 0) / totalKm : 0;
+      return { ...p, display, entries, appearances: entries.length, years: new Set(entries.map((e) => e.year)).size, fastest, bestLeg, favLeg, legCount, avgPct, bestPct, totalKm, avgKm, paceS };
     }).sort((a, b) => b.appearances - a.appearances || a.display.localeCompare(b.display));
 
     const chart = events.map((e) => ({
@@ -325,7 +336,7 @@ function EventView({ year, m, go }) {
           <Stat k="Finish time" v={e.status === "finished" ? e.final_time : "DNF"} />
           <Stat k="Placing" v={e.final_place ?? "—"} sub={e.field_size ? `of ${e.field_size}` : ""} />
           <Stat k="Team #" v={e.team_number} />
-          <Stat k="Legs" v={e.legs.length} />
+          <Stat k="Course" v={e.course_km ? `${e.course_km}` : "—"} sub={e.course_km ? "km · 7 legs" : ""} />
         </div>
       </section>
       <div className="benchmark">
@@ -348,9 +359,12 @@ function EventView({ year, m, go }) {
             return (
               <div className="leg" key={l.leg}>
                 <div className="leg-no mono">{l.leg}</div>
-                <button className="leg-runner" onClick={() => go({ type: "profile", key: normName(l.runner) })}>
-                  {l.runner}
-                </button>
+                <div className="leg-mid">
+                  <button className="leg-runner" onClick={() => go({ type: "profile", key: normName(l.runner) })}>
+                    {l.runner}
+                  </button>
+                  <span className="leg-dist mono">{l.distance_km ? `${l.distance_km.toFixed(1)} km` : ""}</span>
+                </div>
                 <div className="leg-time mono">{l.official ? l.leg_time : `(${l.leg_time})`}</div>
                 <div className="leg-rank mono muted">{l.leg_rank ? `${l.leg_rank}/${l.leg_field}` : "—"}</div>
                 <div className="leg-cum mono">
@@ -381,8 +395,27 @@ function Profile({ pkey, m, go }) {
           <Stat k="Legs run" v={p.appearances} sub={p.years && p.years < p.appearances ? `${p.years} Jukolas` : ""} />
           <Stat k="Usual leg" v={p.favLeg} />
           <Stat k="Fastest leg" v={p.fastest ? p.fastest.leg_time : "—"} sub={p.fastest ? `leg ${p.fastest.leg} · ${p.fastest.year}` : ""} />
-          <Stat k="Best leg rank" v={p.bestLeg?.leg_rank ?? "—"} sub={p.bestLeg ? `of ${p.bestLeg.leg_field} · ${p.bestLeg.year}` : ""} />
+          <Stat k="Avg placing" v={topPct(p.avgPct)} sub="field-relative" />
         </div>
+      </section>
+      <section className="panel">
+        <h2 className="h2">Performance</h2>
+        <div className="records">
+          <div className="rec"><div className="rec-k">Best leg placing</div><div className="rec-v mono">{topPct(p.bestPct ? p.bestPct.leg_rank / p.bestPct.leg_field : null)}</div><div className="rec-sub">{p.bestPct ? `${p.bestPct.leg_rank}/${p.bestPct.leg_field} · leg ${p.bestPct.leg} · ${p.bestPct.year}` : "—"}</div></div>
+          <div className="rec"><div className="rec-k">Avg pace</div><div className="rec-v mono">{fmtPace(p.paceS)}<span className="rec-unit"> /km</span></div><div className="rec-sub">orienteering pace</div></div>
+          <div className="rec"><div className="rec-k">Avg leg length</div><div className="rec-v mono">{p.avgKm ? p.avgKm.toFixed(1) : "—"}<span className="rec-unit"> km</span></div><div className="rec-sub">per leg run</div></div>
+          <div className="rec"><div className="rec-k">Total distance</div><div className="rec-v mono">{p.totalKm ? Math.round(p.totalKm) : "—"}<span className="rec-unit"> km</span></div><div className="rec-sub">{p.appearances} legs of forest</div></div>
+        </div>
+        <div className="legdist">
+          {[1, 2, 3, 4, 5, 6, 7].map((n) => (
+            <div className={`ld ${p.legCount[n] ? "has" : ""}`} key={n}>
+              <div className="ld-bar" style={{ height: `${(p.legCount[n] || 0) * 18 + 4}px` }} />
+              <div className="ld-n mono">{n}</div>
+              {p.legCount[n] > 0 && <div className="ld-c mono">{p.legCount[n]}×</div>}
+            </div>
+          ))}
+        </div>
+        <p className="muted small">Placing is field-relative — the top % of teams on that leg, which compares fairly across years since the field size changes. Pace counts navigation time, so it's slow by road-running standards.</p>
       </section>
       <section className="panel">
         <h2 className="h2">Every start</h2>
@@ -393,7 +426,7 @@ function Profile({ pkey, m, go }) {
               <button className="prow" key={`${e.year}-${e.leg}`} onClick={() => go({ type: "event", year: e.year })}>
                 <span className="mono pyear">{e.year}</span>
                 <span className="pcomp">{shortComp(e.competition)}</span>
-                <span className="mono pleg">leg {e.leg}</span>
+                <span className="mono pleg">L{e.leg} · {e.distance_km ? e.distance_km.toFixed(1) : "—"}km</span>
                 <span className={`mono ptime ${!e.official ? "dnf-txt" : ""}`}>{e.official ? e.leg_time : `(${e.leg_time})`}</span>
                 <span className="pbar"><span className="pbar-fill" style={{ width: `${Math.max(pct * 100, 2)}%` }} /></span>
                 <span className="mono prank muted">{e.leg_rank ? `${e.leg_rank}/${e.leg_field}` : "—"}</span>
@@ -691,6 +724,13 @@ function Style() {
 .rec-k{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
 .rec-v{font-size:30px;font-weight:600;margin:8px 0 4px;color:var(--orange)}
 .rec-sub{font-size:12px;color:var(--muted)}
+.rec-unit{font-size:14px;color:var(--muted);font-weight:400}
+.legdist{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin:16px 2px 6px;height:78px}
+.ld{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:5px;height:100%}
+.ld-bar{width:100%;max-width:34px;border-radius:5px 5px 0 0;background:rgba(255,255,255,.06)}
+.ld.has .ld-bar{background:linear-gradient(180deg,var(--yellow),var(--yellow-d))}
+.ld-n{font-size:11px;color:var(--muted)}
+.ld-c{font-size:10px;color:var(--yellow)}
 
 /* roster */
 .roster{display:grid;grid-template-columns:repeat(2,1fr);gap:10px}
@@ -709,6 +749,8 @@ function Style() {
 .leg{display:grid;grid-template-columns:34px 1fr 92px 78px 92px;gap:10px;align-items:center;
   background:rgba(0,0,0,.16);border:1px solid var(--hair);border-radius:11px;padding:11px 13px}
 .leg-no{width:28px;height:28px;border-radius:50%;border:2px solid var(--yellow);display:grid;place-items:center;font-size:13px;font-weight:600}
+.leg-mid{display:flex;flex-direction:column;gap:1px;min-width:0}
+.leg-dist{font-size:11px;color:var(--muted)}
 .leg-runner{background:none;border:0;color:var(--ink);text-align:left;cursor:pointer;font-size:14.5px;font-weight:500;padding:0}
 .leg-runner:hover{color:var(--yellow)}
 .leg-time{text-align:right;font-size:14px} .leg-rank{text-align:right;font-size:12px}
