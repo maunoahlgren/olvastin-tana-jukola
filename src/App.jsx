@@ -150,7 +150,20 @@ function useModel() {
       .map((e) => ({ e, ratio: e.final_time_s / e.winner_time_s }))
       .reduce((m, x) => (!m || x.ratio < m.ratio ? x : m), null);
 
-    return { events, finished, bestTime, bestPlace, fastestLeg, participants, chart, bestRatio };
+    const fastestByLeg = {};
+    let biggestGain = null;
+    events.forEach((e) => e.legs.forEach((l) => {
+      if (l.official && l.leg_time_s) {
+        const cur = fastestByLeg[l.leg];
+        if (!cur || l.leg_time_s < cur.leg_time_s) fastestByLeg[l.leg] = { ...l, year: e.year };
+      }
+      if (l.official && l.place_change != null && l.place_change < 0 && (!biggestGain || l.place_change < biggestGain.place_change))
+        biggestGain = { ...l, year: e.year };
+    }));
+    const mostLegs = participants[0];
+    const mostKm = [...participants].sort((a, b) => b.totalKm - a.totalKm)[0];
+
+    return { events, finished, bestTime, bestPlace, fastestLeg, participants, chart, bestRatio, fastestByLeg, biggestGain, mostLegs, mostKm };
   }, []);
 }
 
@@ -302,6 +315,43 @@ function Home({ m, go }) {
       </section>
 
       <section className="panel">
+        <h2 className="h2">Team records</h2>
+        <div className="records" style={{ marginBottom: 14 }}>
+          <div className="rec">
+            <div className="rec-k">Biggest leg surge</div>
+            <div className="rec-v mono">+{m.biggestGain ? Math.abs(m.biggestGain.place_change) : "—"}</div>
+            <div className="rec-sub">{m.biggestGain ? `${m.biggestGain.runner} · leg ${m.biggestGain.leg} · ${m.biggestGain.year}` : "—"}</div>
+          </div>
+          <div className="rec">
+            <div className="rec-k">Most legs run</div>
+            <div className="rec-v mono">{m.mostLegs?.appearances}</div>
+            <div className="rec-sub">{m.mostLegs?.display}</div>
+          </div>
+          <div className="rec">
+            <div className="rec-k">Most kilometres</div>
+            <div className="rec-v mono">{m.mostKm ? Math.round(m.mostKm.totalKm) : "—"}<span className="rec-unit"> km</span></div>
+            <div className="rec-sub">{m.mostKm?.display}</div>
+          </div>
+        </div>
+        <div className="table">
+          <div className="tr th lr"><span>Leg</span><span className="num">Length</span><span className="num">Fastest</span><span>Runner</span><span className="num">Year</span></div>
+          {[1, 2, 3, 4, 5, 6, 7].map((n) => {
+            const r = m.fastestByLeg[n];
+            return (
+              <button className="tr lr" key={n} onClick={() => r && go({ type: "profile", key: normName(r.runner) })}>
+                <span className="mono">{n}</span>
+                <span className="num mono muted">{r ? `${r.distance_km} km` : "—"}</span>
+                <span className="num mono">{r ? r.leg_time : "—"}</span>
+                <span>{r ? r.runner : "—"}</span>
+                <span className="num mono muted">{r ? r.year : "—"}</span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="muted small">Fastest team split ever recorded on each leg number, across all years. A "surge" is the most overall places gained on a single leg.</p>
+      </section>
+
+      <section className="panel">
         <div className="row-between">
           <h2 className="h2">Roster</h2>
           <span className="muted small">{m.participants.length} runners</span>
@@ -325,6 +375,18 @@ function Home({ m, go }) {
 
 function EventView({ year, m, go }) {
   const e = m.events.find((x) => x.year === year);
+  const [open, setOpen] = useState(null);
+  const series = useMemo(() => {
+    if (!e) return [];
+    let cum = 0;
+    const pts = [];
+    e.legs.forEach((l) => {
+      (l.splits || []).forEach((s) => { if (s.place != null) pts.push({ dist: +(cum + s.km).toFixed(1), place: s.place, leg: l.leg, t: s.total_time_s }); });
+      if (l.cumulative_place) pts.push({ dist: +(cum + (l.distance_km || 0)).toFixed(1), place: l.cumulative_place, leg: l.leg, change: true, t: l.cumulative_time_s });
+      cum += l.distance_km || 0;
+    });
+    return pts;
+  }, [e]);
   if (!e) return null;
   return (
     <div className="stack">
@@ -350,27 +412,68 @@ function EventView({ year, m, go }) {
           <span className="bm-ratio mono">Olvastin Tana · {(e.final_time_s / e.winner_time_s).toFixed(2)}× winner</span>
         )}
       </div>
+
+      {series.length > 1 && (
+        <section className="panel">
+          <h2 className="h2">Position through the race</h2>
+          <div style={{ width: "100%", height: 260 }}>
+            <ResponsiveContainer>
+              <ComposedChart data={series} margin={{ top: 18, right: 10, left: -8, bottom: 4 }}>
+                <XAxis dataKey="dist" type="number" domain={[0, "dataMax"]} unit="km" tick={{ fill: "var(--muted)", fontSize: 11, fontFamily: "var(--mono)" }} axisLine={{ stroke: "var(--hair)" }} tickLine={false} />
+                <YAxis reversed allowDecimals={false} tick={{ fill: "var(--muted)", fontSize: 11, fontFamily: "var(--mono)" }} axisLine={false} tickLine={false} width={44} />
+                <Tooltip content={({ active, payload }) => {
+                  if (!active || !payload || !payload.length) return null;
+                  const d = payload[0].payload;
+                  return (
+                    <div style={{ background: "var(--bg2)", border: "1px solid var(--hair)", borderRadius: 10, padding: "8px 11px", fontFamily: "var(--mono)", fontSize: 12, color: "var(--ink)" }}>
+                      <div>leg {d.leg} · {d.dist} km{d.change ? " · change-over" : ""}</div>
+                      <div style={{ color: "var(--yellow)" }}>position {d.place}</div>
+                    </div>
+                  );
+                }} />
+                <Line type="monotone" dataKey="place" stroke="var(--yellow)" strokeWidth={2} dot={{ r: 2, fill: "var(--yellow)" }} activeDot={{ r: 5 }} isAnimationActive={false} />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <p className="muted small">Overall team position across the whole relay (higher on the chart = better placed). Each point is a timing control; the climbs and dips show where legs were won and lost.</p>
+        </section>
+      )}
+
       <section className="panel">
-        <h2 className="h2">Legs</h2>
+        <h2 className="h2">Legs <span className="muted small" style={{ fontWeight: 400 }}>· tap a number for splits</span></h2>
         <div className="legs">
           {e.legs.map((l) => {
             const up = l.place_change != null && l.place_change < 0;
             const down = l.place_change != null && l.place_change > 0;
+            const hasSplits = (l.splits || []).length > 0;
+            const isOpen = open === l.leg;
             return (
-              <div className="leg" key={l.leg}>
-                <div className="leg-no mono">{l.leg}</div>
-                <div className="leg-mid">
-                  <button className="leg-runner" onClick={() => go({ type: "profile", key: normName(l.runner) })}>
-                    {l.runner}
-                  </button>
-                  <span className="leg-dist mono">{l.distance_km ? `${l.distance_km.toFixed(1)} km` : ""}</span>
+              <div key={l.leg}>
+                <div className="leg">
+                  <button className={`leg-no mono tog ${isOpen ? "open" : ""}`} onClick={() => hasSplits && setOpen(isOpen ? null : l.leg)} title={hasSplits ? "Show splits" : ""}>{l.leg}</button>
+                  <div className="leg-mid">
+                    <button className="leg-runner" onClick={() => go({ type: "profile", key: normName(l.runner) })}>{l.runner}</button>
+                    <span className="leg-dist mono">{l.distance_km ? `${l.distance_km.toFixed(1)} km` : ""}</span>
+                  </div>
+                  <div className="leg-time mono">{l.official ? l.leg_time : `(${l.leg_time})`}</div>
+                  <div className="leg-rank mono muted">{l.leg_rank ? `${l.leg_rank}/${l.leg_field}` : "—"}</div>
+                  <div className="leg-cum mono">
+                    {l.cumulative_place ? l.cumulative_place : "—"}
+                    {(up || down) && <span className={up ? "up" : "down"}>{up ? "▲" : "▼"}{Math.abs(l.place_change)}</span>}
+                  </div>
                 </div>
-                <div className="leg-time mono">{l.official ? l.leg_time : `(${l.leg_time})`}</div>
-                <div className="leg-rank mono muted">{l.leg_rank ? `${l.leg_rank}/${l.leg_field}` : "—"}</div>
-                <div className="leg-cum mono">
-                  {l.cumulative_place ? l.cumulative_place : "—"}
-                  {(up || down) && <span className={up ? "up" : "down"}>{up ? "▲" : "▼"}{Math.abs(l.place_change)}</span>}
-                </div>
+                {isOpen && hasSplits && (
+                  <div className="splits">
+                    {l.splits.map((s, i) => (
+                      <div className="sp" key={i}>
+                        <span className="sp-km mono">{s.km} km</span>
+                        <span className="mono">{hms(s.leg_time_s)}</span>
+                        <span className="sp-bar"><span className="sp-fill" style={{ width: `${l.leg_field ? Math.max((1 - s.place / l.leg_field) * 100, 2) : 50}%` }} /></span>
+                        <span className="mono muted">#{s.place}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             );
           })}
@@ -598,6 +701,67 @@ function LiveView() {
   );
 }
 
+function CompareView({ m }) {
+  const ps = m.participants;
+  const [a, setA] = useState(ps[0]?.key);
+  const [b, setB] = useState(ps[1]?.key);
+  const A = ps.find((x) => x.key === a) || ps[0];
+  const B = ps.find((x) => x.key === b) || ps[1];
+  const init = (p) => stripAccents(p.display).split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase();
+  const better = (av, bv, dir) => {
+    if (av == null || bv == null || av === bv) return null;
+    if (dir === "high") return av > bv ? "a" : "b";
+    if (dir === "low") return av < bv ? "a" : "b";
+    return null;
+  };
+  const rows = [
+    { label: "Legs run", da: A.appearances, db: B.appearances, w: better(A.appearances, B.appearances, "high") },
+    { label: "Jukolas", da: A.years, db: B.years, w: better(A.years, B.years, "high") },
+    { label: "Usual leg", da: A.favLeg, db: B.favLeg },
+    { label: "Fastest leg", da: A.fastest ? A.fastest.leg_time : "—", db: B.fastest ? B.fastest.leg_time : "—", w: better(A.fastest?.leg_time_s, B.fastest?.leg_time_s, "low") },
+    { label: "Avg placing", da: topPct(A.avgPct), db: topPct(B.avgPct), w: better(A.avgPct, B.avgPct, "low") },
+    { label: "Best leg", da: topPct(A.bestPct ? A.bestPct.leg_rank / A.bestPct.leg_field : null), db: topPct(B.bestPct ? B.bestPct.leg_rank / B.bestPct.leg_field : null), w: better(A.bestPct ? A.bestPct.leg_rank / A.bestPct.leg_field : null, B.bestPct ? B.bestPct.leg_rank / B.bestPct.leg_field : null, "low") },
+    { label: "Avg pace /km", da: fmtPace(A.paceS), db: fmtPace(B.paceS), w: better(A.paceS, B.paceS, "low") },
+    { label: "Avg leg length", da: km(A.avgKm), db: km(B.avgKm) },
+    { label: "Total distance", da: km(A.totalKm), db: km(B.totalKm), w: better(A.totalKm, B.totalKm, "high") },
+  ];
+  return (
+    <div className="stack">
+      <section className="hero compact">
+        <p className="eyebrow">Head to head</p>
+        <h1 className="title sm">Compare runners</h1>
+      </section>
+      <section className="panel">
+        <div className="cmp-head">
+          <div className="cmp-pick">
+            <div className="avatar">{init(A)}</div>
+            <select className="cmp-sel" value={a} onChange={(ev) => setA(ev.target.value)}>
+              {ps.map((p) => <option key={p.key} value={p.key}>{p.display}</option>)}
+            </select>
+          </div>
+          <span className="cmp-vs mono">vs</span>
+          <div className="cmp-pick">
+            <div className="avatar">{init(B)}</div>
+            <select className="cmp-sel" value={b} onChange={(ev) => setB(ev.target.value)}>
+              {ps.map((p) => <option key={p.key} value={p.key}>{p.display}</option>)}
+            </select>
+          </div>
+        </div>
+        <div className="cmp-rows">
+          {rows.map((r) => (
+            <div className="cmp-row" key={r.label}>
+              <span className={`cmp-v mono ${r.w === "a" ? "win" : ""}`}>{r.da}</span>
+              <span className="cmp-k">{r.label}</span>
+              <span className={`cmp-v mono ${r.w === "b" ? "win" : ""}`}>{r.db}</span>
+            </div>
+          ))}
+        </div>
+        <p className="muted small">Highlighted side is the stronger of the two on that metric. Placing and pace are field-relative / distance-normalised, so they compare fairly across different years and legs.</p>
+      </section>
+    </div>
+  );
+}
+
 /* ---------- shell ---------- */
 export default function App() {
   const m = useModel();
@@ -614,6 +778,7 @@ export default function App() {
         </button>
         <nav className="nav">
           <button className={`nav-btn ${view.type === "home" ? "act" : ""}`} onClick={() => go({ type: "home" })}>History</button>
+          <button className={`nav-btn ${view.type === "compare" ? "act" : ""}`} onClick={() => go({ type: "compare" })}>Compare</button>
           <button className={`nav-btn live ${view.type === "live" ? "act" : ""}`} onClick={() => go({ type: "live" })}>● Live 2026</button>
         </nav>
       </header>
@@ -621,6 +786,7 @@ export default function App() {
         {view.type === "home" && <Home m={m} go={go} />}
         {view.type === "event" && <EventView year={view.year} m={m} go={go} />}
         {view.type === "profile" && <Profile pkey={view.key} m={m} go={go} />}
+        {view.type === "compare" && <CompareView m={m} />}
         {view.type === "live" && <LiveView />}
       </main>
       <footer className="foot mono">
@@ -730,6 +896,16 @@ function Style() {
   padding:12px 14px;background:none;border:0;border-top:1px solid var(--hair);text-align:left;color:var(--ink);cursor:pointer;font-size:14px;width:100%}
 .tr:first-child{border-top:0}
 .tr.th{background:rgba(0,0,0,.18);color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.08em;cursor:default}
+.tr.lr{grid-template-columns:40px 74px 86px 1fr 52px}
+.leg-no.tog{cursor:pointer;transition:.15s}
+.leg-no.tog:hover{background:rgba(255,230,0,.12)}
+.leg-no.open{background:var(--yellow);color:#111}
+.splits{margin:2px 0 8px 40px;border-left:2px solid var(--hair);padding-left:12px;display:flex;flex-direction:column;gap:5px}
+.sp{display:grid;grid-template-columns:58px 64px 1fr 46px;gap:10px;align-items:center;font-size:12.5px}
+.sp-km{color:var(--muted)}
+.sp-bar{height:6px;border-radius:3px;background:rgba(255,255,255,.06);overflow:hidden}
+.sp-fill{display:block;height:100%;background:var(--yellow)}
+@media(max-width:560px){.tr.lr{grid-template-columns:30px 60px 72px 1fr 0}.tr.lr span:last-child{display:none}}
 .tr:not(.th):hover{background:rgba(255,230,0,.06)}
 .dnf-txt{color:var(--red)}
 
@@ -796,6 +972,16 @@ function Style() {
   padding:7px 14px;cursor:pointer;font-family:var(--mono);font-size:12.5px}
 .back:hover{color:var(--ink);border-color:var(--yellow)}
 .foot{max-width:880px;margin:16px auto 0;padding:18px;color:var(--muted);font-size:11.5px;text-align:center;border-top:1px solid var(--hair)}
+.cmp-head{display:flex;align-items:center;gap:12px;margin-bottom:18px}
+.cmp-pick{flex:1;display:flex;flex-direction:column;align-items:center;gap:8px}
+.cmp-vs{color:var(--muted);font-size:13px}
+.cmp-sel{width:100%;max-width:180px;background:var(--bg2);color:var(--ink);border:1px solid var(--hair);border-radius:9px;padding:8px 10px;font-family:var(--body);font-size:13px;cursor:pointer}
+.cmp-rows{display:flex;flex-direction:column}
+.cmp-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:10px;padding:11px 6px;border-top:1px solid var(--hair)}
+.cmp-row:first-child{border-top:0}
+.cmp-v{font-size:15px;text-align:center}
+.cmp-v.win{color:var(--yellow);font-weight:600}
+.cmp-k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
 
 @media(max-width:640px){
   .stats{grid-template-columns:repeat(2,1fr)}
