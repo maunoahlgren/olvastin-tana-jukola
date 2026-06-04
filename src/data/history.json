@@ -104,7 +104,11 @@
       "final_place": 1101,
       "field_size": 1359,
       "status": "finished",
-      "year": 2014
+      "year": 2014,
+      "winner_team": "Kalevan Rasti",
+      "winner_country": "FIN",
+      "winner_time": "7:59:01",
+      "winner_time_s": 28741
     },
     {
       "competition": "Louna-Jukola 2015, Jukolan Viesti",
@@ -208,7 +212,11 @@
       "final_place": 1192,
       "field_size": 1518,
       "status": "finished",
-      "year": 2015
+      "year": 2015,
+      "winner_team": "Kristiansand OK",
+      "winner_country": "NOR",
+      "winner_time": "8:07:27",
+      "winner_time_s": 29247
     },
     {
       "competition": "Lappee-Jukola 2016, Jukolan Viesti",
@@ -217,7 +225,7 @@
       "legs": [
         {
           "leg": 1,
-          "runner": "Iiro Mäkelä",
+          "runner": "Tero Backman",
           "leg_time": "2:11:44",
           "leg_time_s": 7904,
           "official": true,
@@ -256,7 +264,7 @@
         },
         {
           "leg": 4,
-          "runner": "Tero Backman",
+          "runner": "Miro Saari",
           "leg_time": "1:34:37",
           "leg_time_s": 5677,
           "official": true,
@@ -269,7 +277,7 @@
         },
         {
           "leg": 5,
-          "runner": "Jarkko Kumpulainen",
+          "runner": "Iiro Mäkelä",
           "leg_time": "1:15:55",
           "leg_time_s": 4555,
           "official": true,
@@ -312,7 +320,11 @@
       "final_place": 886,
       "field_size": 1375,
       "status": "finished",
-      "year": 2016
+      "year": 2016,
+      "winner_team": "Koovee",
+      "winner_country": "FIN",
+      "winner_time": "8:03:46",
+      "winner_time_s": 29026
     },
     {
       "competition": "Joensuu-Jukola 2017, Jukolan Viesti",
@@ -416,7 +428,11 @@
       "final_place": 910,
       "field_size": 1352,
       "status": "finished",
-      "year": 2017
+      "year": 2017,
+      "winner_team": "IFK Göteborg",
+      "winner_country": "SWE",
+      "winner_time": "7:31:45",
+      "winner_time_s": 27105
     },
     {
       "competition": "Lahti-Hollola Jukola 2018, Jukolan Viesti",
@@ -520,7 +536,11 @@
       "final_place": 1166,
       "field_size": 1644,
       "status": "finished",
-      "year": 2018
+      "year": 2018,
+      "winner_team": "Koovee",
+      "winner_country": "FIN",
+      "winner_time": "7:27:18",
+      "winner_time_s": 26838
     },
     {
       "competition": "Kangasala-Jukola 2019, Jukolan Viesti",
@@ -624,7 +644,11 @@
       "final_place": 1295,
       "field_size": 1653,
       "status": "finished",
-      "year": 2019
+      "year": 2019,
+      "winner_team": "Stora Tuna OK",
+      "winner_country": "SWE",
+      "winner_time": "7:14:39",
+      "winner_time_s": 26079
     },
     {
       "competition": "Lakia-Jukola 2024, Jukolan Viesti",
@@ -728,7 +752,11 @@
       "final_place": 1538,
       "field_size": 1617,
       "status": "dnf",
-      "year": 2024
+      "year": 2024,
+      "winner_team": "Stora Tuna OK",
+      "winner_country": "SWE",
+      "winner_time": "7:58:21",
+      "winner_time_s": 28701
     },
     {
       "competition": "Mikkeli-Jukola 2025, Jukolan Viesti",
@@ -776,7 +804,7 @@
         },
         {
           "leg": 4,
-          "runner": "Iiro Mäkelä",
+          "runner": "Jyrki Orjasniemi",
           "leg_time": "1:19:44",
           "leg_time_s": 4784,
           "official": true,
@@ -802,7 +830,7 @@
         },
         {
           "leg": 6,
-          "runner": "Olli Nissinen",
+          "runner": "Iiro Mäkelä",
           "leg_time": "3:03:22",
           "leg_time_s": 11002,
           "official": true,
@@ -832,7 +860,11 @@
       "final_place": 1107,
       "field_size": 1318,
       "status": "finished",
-      "year": 2025
+      "year": 2025,
+      "winner_team": "Stora Tuna OK",
+      "winner_country": "SWE",
+      "winner_time": "8:24:01",
+      "winner_time_s": 30241
     }
   ],
   "live2026": {

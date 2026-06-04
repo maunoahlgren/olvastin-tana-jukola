@@ -1,6 +1,8 @@
 import React, { useState, useMemo } from "react";
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList } from "recharts";
 import DATA from "./data/history.json";
+import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList, Legend } from "recharts";
+
+
 
 /* ---------- helpers ---------- */
 const stripAccents = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -48,17 +50,25 @@ function useModel() {
       const legCount = {};
       entries.forEach((e) => (legCount[e.leg] = (legCount[e.leg] || 0) + 1));
       const favLeg = Object.entries(legCount).sort((a, b) => b[1] - a[1])[0][0];
-      return { ...p, display, entries, appearances: entries.length, fastest, bestLeg, favLeg };
+      return { ...p, display, entries, appearances: entries.length, years: new Set(entries.map((e) => e.year)).size, fastest, bestLeg, favLeg };
     }).sort((a, b) => b.appearances - a.appearances || a.display.localeCompare(b.display));
 
     const chart = events.map((e) => ({
       year: e.year,
       hours: e.status === "finished" ? +(e.final_time_s / 3600).toFixed(2) : 0,
+      winnerHours: +(e.winner_time_s / 3600).toFixed(2),
+      winnerTeam: e.winner_team,
+      winnerTime: e.winner_time,
+      ratio: e.status === "finished" ? e.final_time_s / e.winner_time_s : null,
       dnf: e.status !== "finished",
       label: e.status === "finished" ? e.final_time : "DNF",
     }));
 
-    return { events, finished, bestTime, bestPlace, fastestLeg, participants, chart };
+    const bestRatio = finished
+      .map((e) => ({ e, ratio: e.final_time_s / e.winner_time_s }))
+      .reduce((m, x) => (!m || x.ratio < m.ratio ? x : m), null);
+
+    return { events, finished, bestTime, bestPlace, fastestLeg, participants, chart, bestRatio };
   }, []);
 }
 
@@ -129,23 +139,37 @@ function Home({ m, go }) {
       </section>
 
       <section className="panel">
-        <h2 className="h2">Finish times by year</h2>
-        <div style={{ width: "100%", height: 280 }}>
+        <h2 className="h2">Olvastin Tana vs. the winner</h2>
+        <div style={{ width: "100%", height: 300 }}>
           <ResponsiveContainer>
-            <BarChart data={m.chart} margin={{ top: 24, right: 8, left: -8, bottom: 0 }}>
+            <ComposedChart data={m.chart} margin={{ top: 24, right: 8, left: -8, bottom: 0 }}>
               <XAxis dataKey="year" tick={{ fill: "var(--muted)", fontSize: 12, fontFamily: "var(--mono)" }} axisLine={{ stroke: "var(--hair)" }} tickLine={false} />
               <YAxis tick={{ fill: "var(--muted)", fontSize: 12, fontFamily: "var(--mono)" }} axisLine={false} tickLine={false} unit="h" domain={[0, 22]} />
               <Tooltip cursor={{ fill: "rgba(255,255,255,0.04)" }}
-                contentStyle={{ background: "var(--bg2)", border: "1px solid var(--hair)", borderRadius: 10, fontFamily: "var(--mono)", color: "var(--ink)" }}
-                formatter={(v, n, p) => [p.payload.label, "Finish"]} />
-              <Bar dataKey="hours" radius={[4, 4, 0, 0]}>
+                contentStyle={{ background: "var(--bg2)", border: "1px solid var(--hair)", borderRadius: 10, fontFamily: "var(--mono)", color: "var(--ink)", fontSize: 12 }}
+                content={({ active, payload }) => {
+                  if (!active || !payload || !payload.length) return null;
+                  const d = payload[0].payload;
+                  return (
+                    <div style={{ background: "var(--bg2)", border: "1px solid var(--hair)", borderRadius: 10, padding: "10px 12px", fontFamily: "var(--mono)", fontSize: 12, color: "var(--ink)" }}>
+                      <div style={{ fontWeight: 600, marginBottom: 4 }}>{d.year}</div>
+                      <div style={{ color: "var(--magenta)" }}>Olvastin Tana: {d.label}</div>
+                      <div style={{ color: "var(--amber)" }}>Winner: {d.winnerTime}</div>
+                      <div style={{ color: "var(--muted)", fontSize: 11 }}>{d.winnerTeam}</div>
+                      {d.ratio && <div style={{ color: "var(--muted)", marginTop: 3 }}>{d.ratio.toFixed(2)}× winning time</div>}
+                    </div>
+                  );
+                }} />
+              <Legend wrapperStyle={{ fontFamily: "var(--mono)", fontSize: 11, color: "var(--muted)" }} />
+              <Bar dataKey="hours" name="Olvastin Tana" radius={[4, 4, 0, 0]}>
                 <LabelList dataKey="label" position="top" style={{ fill: "var(--muted)", fontSize: 10, fontFamily: "var(--mono)" }} />
                 {m.chart.map((d, i) => <Cell key={i} fill={d.dnf ? "var(--bg2)" : "var(--magenta)"} stroke={d.dnf ? "var(--red)" : "none"} strokeDasharray={d.dnf ? "3 3" : "0"} />)}
               </Bar>
-            </BarChart>
+              <Line type="monotone" dataKey="winnerHours" name="Winner" stroke="var(--amber)" strokeWidth={2} dot={{ r: 3, fill: "var(--amber)" }} activeDot={{ r: 5 }} />
+            </ComposedChart>
           </ResponsiveContainer>
         </div>
-        <p className="muted small">Leg distances change with every venue, so cross-year times are a vibe, not a benchmark. 2024 (Lakia) was a disqualification on leg 2 — the team ran on, but the result wasn't classified.</p>
+        <p className="muted small">The winner's time (amber) sets the year's benchmark — it absorbs how long and how rough each course was, so the gap to it compares far better across years than raw time. Olvastin Tana's relatively closest run was {m.bestRatio && shortComp(m.bestRatio.e.competition)} ({m.bestRatio && m.bestRatio.ratio.toFixed(2)}× the winner). 2024 (Lakia) was a leg-2 disqualification, so there's no classified finish that year.</p>
       </section>
 
       <section className="panel">
@@ -187,6 +211,11 @@ function Home({ m, go }) {
             <div className="rec-v mono">{m.bestPlace?.final_place}</div>
             <div className="rec-sub">of {m.bestPlace?.field_size} · {shortComp(m.bestPlace?.competition)}</div>
           </div>
+          <div className="rec">
+            <div className="rec-k">Closest to the winner</div>
+            <div className="rec-v mono">{m.bestRatio && m.bestRatio.ratio.toFixed(2)}×</div>
+            <div className="rec-sub">{m.bestRatio && shortComp(m.bestRatio.e.competition)} · vs {m.bestRatio && m.bestRatio.e.winner_team}</div>
+          </div>
         </div>
       </section>
 
@@ -201,7 +230,7 @@ function Home({ m, go }) {
               <div className="avatar">{stripAccents(p.display).split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}</div>
               <div className="card-body">
                 <div className="card-name">{p.display}</div>
-                <div className="card-meta mono">{p.appearances} {p.appearances === 1 ? "start" : "starts"} · leg {p.favLeg}</div>
+                <div className="card-meta mono">{p.appearances} {p.appearances === 1 ? "leg" : "legs"} · leg {p.favLeg}</div>
               </div>
               <div className="card-pr mono">{p.fastest ? p.fastest.leg_time : "—"}</div>
             </button>
@@ -228,6 +257,17 @@ function EventView({ year, m, go }) {
           <Stat k="Legs" v={e.legs.length} />
         </div>
       </section>
+      <div className="benchmark">
+        <span className="bm-flag" aria-hidden />
+        <div className="bm-main">
+          <span className="bm-k">Winner</span>
+          <span className="bm-team">{e.winner_team} <span className="muted">· {e.winner_country}</span></span>
+        </div>
+        <span className="bm-time mono">{e.winner_time}</span>
+        {e.status === "finished" && (
+          <span className="bm-ratio mono">Olvastin Tana · {(e.final_time_s / e.winner_time_s).toFixed(2)}× winner</span>
+        )}
+      </div>
       <section className="panel">
         <h2 className="h2">Legs</h2>
         <div className="legs">
@@ -267,7 +307,7 @@ function Profile({ pkey, m, go }) {
         <div className="avatar big">{stripAccents(p.display).split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}</div>
         <h1 className="title sm">{p.display}</h1>
         <div className="stats">
-          <Stat k="Jukola starts" v={p.appearances} />
+          <Stat k="Legs run" v={p.appearances} sub={p.years && p.years < p.appearances ? `${p.years} Jukolas` : ""} />
           <Stat k="Usual leg" v={p.favLeg} />
           <Stat k="Fastest leg" v={p.fastest ? p.fastest.leg_time : "—"} sub={p.fastest ? `leg ${p.fastest.leg} · ${p.fastest.year}` : ""} />
           <Stat k="Best leg rank" v={p.bestLeg?.leg_rank ?? "—"} sub={p.bestLeg ? `of ${p.bestLeg.leg_field} · ${p.bestLeg.year}` : ""} />
@@ -276,10 +316,10 @@ function Profile({ pkey, m, go }) {
       <section className="panel">
         <h2 className="h2">Every start</h2>
         <div className="ptable">
-          {[...p.entries].reverse().map((e) => {
+          {[...p.entries].sort((a, b) => b.year - a.year || a.leg - b.leg).map((e) => {
             const pct = e.leg_rank && e.leg_field ? 1 - e.leg_rank / e.leg_field : 0;
             return (
-              <button className="prow" key={e.year} onClick={() => go({ type: "event", year: e.year })}>
+              <button className="prow" key={`${e.year}-${e.leg}`} onClick={() => go({ type: "event", year: e.year })}>
                 <span className="mono pyear">{e.year}</span>
                 <span className="pcomp">{shortComp(e.competition)}</span>
                 <span className="mono pleg">leg {e.leg}</span>
@@ -407,7 +447,7 @@ function Style() {
 .dnf-txt{color:var(--red)}
 
 /* records */
-.records{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.records{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px}
 .rec{border:1px solid var(--hair);border-radius:14px;padding:16px;background:rgba(0,0,0,.16)}
 .rec-k{font-size:11px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted)}
 .rec-v{font-size:30px;font-weight:600;margin:8px 0 4px;color:var(--amber)}
@@ -447,6 +487,15 @@ function Style() {
 .pbar-fill{display:block;height:100%;background:linear-gradient(90deg,var(--magenta-d),var(--magenta))}
 .prank{text-align:right;font-size:12px}
 
+.benchmark{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:linear-gradient(90deg,rgba(255,194,75,.10),rgba(255,194,75,.02));
+  border:1px solid rgba(255,194,75,.28);border-radius:14px;padding:14px 18px}
+.bm-flag{width:18px;height:18px;flex:none;background:linear-gradient(135deg,#fff 0 50%,var(--amber) 50% 100%);border:1px solid var(--amber);border-radius:3px}
+.bm-main{display:flex;flex-direction:column;gap:1px;margin-right:auto}
+.bm-k{font-size:10.5px;text-transform:uppercase;letter-spacing:.1em;color:var(--amber)}
+.bm-team{font-weight:600;font-size:15px}
+.bm-time{font-size:17px;color:var(--amber)}
+.bm-ratio{font-size:12px;color:var(--muted);border-left:1px solid var(--hair);padding-left:14px}
+@media(max-width:560px){.bm-ratio{border-left:0;padding-left:0;width:100%}}
 .back{align-self:flex-start;background:none;border:1px solid var(--hair);border-radius:999px;color:var(--muted);
   padding:7px 14px;cursor:pointer;font-family:var(--mono);font-size:12.5px}
 .back:hover{color:var(--ink);border-color:var(--magenta)}
