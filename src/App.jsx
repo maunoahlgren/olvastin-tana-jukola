@@ -6,6 +6,8 @@ const LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGMAAACMBAMAAACaBwrx
 
 
 
+const FINLAND = {"viewBox":"0 0 220 494","path":"M 157.1 59.0 L 154.4 91.4 L 183.1 122.3 L 165.8 157.2 L 187.6 210.0 L 175.0 249.7 L 191.9 284.2 L 184.2 314.4 L 212.0 346.2 L 204.9 369.8 L 147.3 455.7 L 113.3 459.4 L 80.3 476.4 L 49.7 486.2 L 38.9 460.9 L 20.7 445.7 L 24.9 400.0 L 15.8 358.2 L 24.7 331.2 L 41.7 302.1 L 84.7 251.9 L 97.2 242.2 L 95.2 222.6 L 69.1 200.7 L 62.8 182.6 L 62.3 111.3 L 8.0 57.0 L 19.2 44.8 L 40.1 69.3 L 64.6 67.0 L 84.8 78.2 L 102.7 57.7 L 111.9 23.7 L 141.0 8.0 L 165.1 26.4 L 157.1 59.0 Z","venues":{"2014":{"town":"Kuopio","x":140.0,"y":345.1},"2015":{"town":"Paimio","x":46.3,"y":457.9},"2016":{"town":"Lappeenranta","x":149.5,"y":430.0},"2017":{"town":"Joensuu","x":179.1,"y":358.5},"2018":{"town":"Hollola","x":99.3,"y":430.9},"2019":{"town":"Kangasala","x":72.3,"y":411.2},"2024":{"town":"Kauhajoki","x":36.8,"y":366.4},"2025":{"town":"Mikkeli","x":132.4,"y":400.8},"2026":{"town":"Kotka","x":126.2,"y":457.4}}};
+
 /* ---------- helpers ---------- */
 const stripAccents = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
 const normName = (n) => stripAccents(n).toLowerCase().trim();
@@ -163,7 +165,15 @@ function useModel() {
     const mostLegs = participants[0];
     const mostKm = [...participants].sort((a, b) => b.totalKm - a.totalKm)[0];
 
-    return { events, finished, bestTime, bestPlace, fastestLeg, participants, chart, bestRatio, fastestByLeg, biggestGain, mostLegs, mostKm };
+    let s14Km = 0, s14S = 0, longestLeg = null;
+    events.forEach((e) => e.legs.forEach((l) => {
+      if (l.distance_km) s14Km += l.distance_km;
+      if (l.leg_time_s) s14S += l.leg_time_s;
+      if (l.distance_km && (!longestLeg || l.distance_km > longestLeg.distance_km)) longestLeg = { ...l, year: e.year };
+    }));
+    const since2014 = { totalKm: s14Km, totalS: s14S, jukolas: events.length, runners: participants.length, longestLeg };
+
+    return { events, finished, bestTime, bestPlace, fastestLeg, participants, chart, bestRatio, fastestByLeg, biggestGain, mostLegs, mostKm, since2014 };
   }, []);
 }
 
@@ -200,6 +210,39 @@ function CourseLine({ events, onPick, onLive }) {
 }
 
 /* ---------- views ---------- */
+function VenueMap({ events, onPick }) {
+  const byYear = {};
+  events.forEach((e) => (byYear[e.year] = e));
+  const years = Object.keys(FINLAND.venues).map(Number).sort((a, b) => a - b);
+  const statusOf = (y) => (y === 2026 ? "next" : byYear[y] && byYear[y].status !== "finished" ? "dnf" : "ok");
+  return (
+    <div className="venuemap">
+      <svg viewBox={FINLAND.viewBox} className="fmap" preserveAspectRatio="xMidYMid meet">
+        <path d={FINLAND.path} className="fmap-land" />
+        {years.map((y) => {
+          const v = FINLAND.venues[y];
+          const st = statusOf(y);
+          return <circle key={y} cx={v.x} cy={v.y} r={st === "next" ? 5.5 : 4.5} className={`vdot ${st}`} onClick={() => onPick(y)} />;
+        })}
+      </svg>
+      <div className="venuelist">
+        {years.map((y) => {
+          const v = FINLAND.venues[y];
+          const e = byYear[y];
+          const st = statusOf(y);
+          return (
+            <button key={y} className={`vchip ${st}`} onClick={() => onPick(y)}>
+              <span className="mono vchip-y">{y}</span>
+              <span className="vchip-t">{v.town}</span>
+              <span className="mono vchip-r">{y === 2026 ? "LIVE" : e ? (e.status === "finished" ? e.final_time : "DNF") : ""}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function Home({ m, go }) {
   const dnf = m.events.length - m.finished.length;
   return (
@@ -227,10 +270,26 @@ function Home({ m, go }) {
         </div>
       </section>
 
+      <section className="panel s14">
+        <h2 className="h2">Since 2014</h2>
+        <div className="s14-grid">
+          <div className="s14-c"><div className="s14-v mono">{Math.round(m.since2014.totalKm)}</div><div className="s14-k">km of forest covered</div></div>
+          <div className="s14-c"><div className="s14-v mono">{Math.round(m.since2014.totalS / 3600)}</div><div className="s14-k">hours on the course</div></div>
+          <div className="s14-c"><div className="s14-v mono">{m.since2014.jukolas}</div><div className="s14-k">nights raced</div></div>
+          <div className="s14-c"><div className="s14-v mono">{m.since2014.runners}</div><div className="s14-k">runners in the bib</div></div>
+        </div>
+        <p className="muted small">That's roughly {(m.since2014.totalS / 86400).toFixed(1)} days of continuous running through Finnish summer nights — the longest single leg anyone's drawn was {m.since2014.longestLeg?.distance_km} km (leg {m.since2014.longestLeg?.leg}, {m.since2014.longestLeg?.year}).</p>
+      </section>
+
       <section className="panel">
         <h2 className="h2">The course so far</h2>
         <p className="muted">Each control is a year. Tap one to open the night.</p>
         <CourseLine events={m.events} onPick={(y) => go({ type: "event", year: y })} onLive={() => go({ type: "live" })} />
+      </section>
+
+      <section className="panel">
+        <h2 className="h2">Where we've raced</h2>
+        <VenueMap events={m.events} onPick={(y) => go(y === 2026 ? { type: "live" } : { type: "event", year: y })} />
       </section>
 
       <section className="panel">
@@ -982,6 +1041,23 @@ function Style() {
 .cmp-v{font-size:15px;text-align:center}
 .cmp-v.win{color:var(--yellow);font-weight:600}
 .cmp-k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
+.s14-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.s14-c{background:rgba(0,0,0,.16);border:1px solid var(--hair);border-radius:12px;padding:16px 14px;text-align:center}
+.s14-v{font-family:var(--disp);font-weight:800;font-size:34px;line-height:1;color:var(--yellow)}
+.s14-k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:8px}
+.venuemap{display:grid;grid-template-columns:200px 1fr;gap:20px;align-items:start}
+.fmap{width:100%;max-width:200px;height:auto}
+.fmap-land{fill:rgba(255,255,255,.05);stroke:var(--hair);stroke-width:1}
+.vdot{fill:var(--yellow);stroke:#0a120d;stroke-width:1.2;cursor:pointer}
+.vdot.dnf{fill:var(--red)} .vdot.next{fill:var(--orange)}
+.venuelist{display:flex;flex-direction:column;gap:6px}
+.vchip{display:grid;grid-template-columns:46px 1fr auto;gap:10px;align-items:center;background:rgba(0,0,0,.16);border:1px solid var(--hair);border-radius:10px;padding:9px 12px;cursor:pointer;color:var(--ink);text-align:left}
+.vchip:hover{border-color:var(--yellow)}
+.vchip.next{border-color:rgba(255,126,46,.4)}
+.vchip-y{font-weight:600} .vchip-t{font-size:14px}
+.vchip-r{font-size:12px;color:var(--muted)}
+.vchip.next .vchip-r{color:var(--orange)} .vchip.dnf .vchip-r{color:var(--red)}
+@media(max-width:560px){.s14-grid{grid-template-columns:repeat(2,1fr)}.venuemap{grid-template-columns:1fr}.fmap{max-width:160px;margin:0 auto;display:block}}
 
 @media(max-width:640px){
   .stats{grid-template-columns:repeat(2,1fr)}
