@@ -1,12 +1,95 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import DATA from "./data/history.json";
 import { ComposedChart, Bar, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell, LabelList, Legend } from "recharts";
+import { initializeApp } from "firebase/app";
+import { getAuth, signInAnonymously } from "firebase/auth";
+import { getFirestore, collection, getDocs, doc, setDoc } from "firebase/firestore";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyDu7ly4QsN92-RcTOPKJ8OOnZJV6YFP1LI",
+  authDomain: "olvastin-tana.firebaseapp.com",
+  projectId: "olvastin-tana",
+  storageBucket: "olvastin-tana.firebasestorage.app",
+  messagingSenderId: "329995217572",
+  appId: "1:329995217572:web:515c0a87058a5830d49431",
+};
+const fbApp = initializeApp(firebaseConfig);
+const fbDb = getFirestore(fbApp);
+const authReady = signInAnonymously(getAuth(fbApp)).catch((e) => console.warn("Anon auth failed:", e));
+
+/* ---------- GPS tracks (Firestore + GPX pipeline) ---------- */
+const _rad = (d) => (d * Math.PI) / 180;
+function _hav(a, b) {
+  const R = 6371000, dla = _rad(b.lat - a.lat), dlo = _rad(b.lng - a.lng);
+  const x = Math.sin(dla / 2) ** 2 + Math.cos(_rad(a.lat)) * Math.cos(_rad(b.lat)) * Math.sin(dlo / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+function parseGpxText(text) {
+  const xml = new DOMParser().parseFromString(text, "application/xml");
+  const out = [];
+  const nodes = xml.getElementsByTagName("trkpt");
+  for (const p of nodes) {
+    const lat = parseFloat(p.getAttribute("lat")), lng = parseFloat(p.getAttribute("lon"));
+    const tEl = p.getElementsByTagName("time")[0];
+    if (isFinite(lat) && isFinite(lng)) out.push({ lat, lng, t: tEl ? Date.parse(tEl.textContent) : null });
+  }
+  return out;
+}
+function trimIdle(a) {
+  if (a.length < 16) return a;
+  const moving = (k, dir) => {
+    let d = 0, dt = 0, n = k;
+    for (let c = 0; c < 8 && n + dir >= 0 && n + dir < a.length; c++) { d += _hav(a[n], a[n + dir]); dt += Math.abs((a[n + dir].t - a[n].t) || 1000) / 1000; n += dir; }
+    return dt > 0 && d / dt > 0.6;
+  };
+  let i = 0, j = a.length - 1;
+  while (i < j && !moving(i, 1)) i++;
+  while (j > i && !moving(j, -1)) j--;
+  return a.slice(i, j + 1);
+}
+function simplifyTrack(raw, target = 400) {
+  const lat0 = _rad(raw[0].lat), kx = Math.cos(lat0);
+  const xy = raw.map((p) => ({ x: p.lng * kx * 111320, y: p.lat * 110540, o: p }));
+  const rdp = (a, eps) => {
+    if (a.length < 3) return a;
+    let dmax = 0, idx = 0; const A = a[0], B = a[a.length - 1];
+    const dx = B.x - A.x, dy = B.y - A.y, Ln = Math.hypot(dx, dy) || 1;
+    for (let i = 1; i < a.length - 1; i++) { const d = Math.abs((a[i].x - A.x) * dy - (a[i].y - A.y) * dx) / Ln; if (d > dmax) { dmax = d; idx = i; } }
+    if (dmax > eps) return rdp(a.slice(0, idx + 1), eps).slice(0, -1).concat(rdp(a.slice(idx), eps));
+    return [A, B];
+  };
+  let eps = 2.5, s = rdp(xy, eps);
+  while (s.length > target) { eps += 1; s = rdp(xy, eps); }
+  return s.map((p) => ({ lat: +p.o.lat.toFixed(5), lng: +p.o.lng.toFixed(5) }));
+}
+function buildTrack(gpxText) {
+  const raw = trimIdle(parseGpxText(gpxText).filter((p) => p.lat));
+  if (raw.length < 2) throw new Error("No track points found in this file.");
+  const points = simplifyTrack(raw);
+  let dist = 0; for (let i = 1; i < raw.length; i++) dist += _hav(raw[i - 1], raw[i]);
+  const durS = raw[0].t && raw[raw.length - 1].t ? Math.round((raw[raw.length - 1].t - raw[0].t) / 1000) : null;
+  return { points, distanceKm: +(dist / 1000).toFixed(2), durationS: durS };
+}
+const trackKey = (runnerKey, year, leg) => `${runnerKey}_${year}_${leg}`;
+async function loadTracks() {
+  const snap = await getDocs(collection(fbDb, "tracks"));
+  const map = {};
+  snap.forEach((d) => { const t = d.data(); map[trackKey(t.runnerKey, t.year, t.leg)] = t; });
+  return map;
+}
+async function saveTrack(t) {
+  await authReady;
+  const id = trackKey(t.runnerKey, t.year, t.leg).replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+  await setDoc(doc(fbDb, "tracks", id), { ...t, createdAt: Date.now() });
+}
 
 const LOGO = "data:image/png;base64,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";
 
 
 
-const FINLAND = {"viewBox":"0 0 220 494","path":"M 157.1 59.0 L 154.4 91.4 L 183.1 122.3 L 165.8 157.2 L 187.6 210.0 L 175.0 249.7 L 191.9 284.2 L 184.2 314.4 L 212.0 346.2 L 204.9 369.8 L 147.3 455.7 L 113.3 459.4 L 80.3 476.4 L 49.7 486.2 L 38.9 460.9 L 20.7 445.7 L 24.9 400.0 L 15.8 358.2 L 24.7 331.2 L 41.7 302.1 L 84.7 251.9 L 97.2 242.2 L 95.2 222.6 L 69.1 200.7 L 62.8 182.6 L 62.3 111.3 L 8.0 57.0 L 19.2 44.8 L 40.1 69.3 L 64.6 67.0 L 84.8 78.2 L 102.7 57.7 L 111.9 23.7 L 141.0 8.0 L 165.1 26.4 L 157.1 59.0 Z","venues":{"2014":{"town":"Kuopio","x":140.0,"y":345.1},"2015":{"town":"Paimio","x":46.3,"y":457.9},"2016":{"town":"Lappeenranta","x":149.5,"y":430.0},"2017":{"town":"Joensuu","x":179.1,"y":358.5},"2018":{"town":"Hollola","x":99.3,"y":430.9},"2019":{"town":"Kangasala","x":72.3,"y":411.2},"2024":{"town":"Kauhajoki","x":36.8,"y":366.4},"2025":{"town":"Mikkeli","x":132.4,"y":400.8},"2026":{"town":"Kotka","x":126.2,"y":457.4}}};
+const FINLAND = {"viewBox":"0 0 220 494","path":"M 157.1 59.0 L 154.4 91.4 L 183.1 122.3 L 165.8 157.2 L 187.6 210.0 L 175.0 249.7 L 191.9 284.2 L 184.2 314.4 L 212.0 346.2 L 204.9 369.8 L 147.3 455.7 L 113.3 459.4 L 80.3 476.4 L 49.7 486.2 L 38.9 460.9 L 20.7 445.7 L 24.9 400.0 L 15.8 358.2 L 24.7 331.2 L 41.7 302.1 L 84.7 251.9 L 97.2 242.2 L 95.2 222.6 L 69.1 200.7 L 62.8 182.6 L 62.3 111.3 L 8.0 57.0 L 19.2 44.8 L 40.1 69.3 L 64.6 67.0 L 84.8 78.2 L 102.7 57.7 L 111.9 23.7 L 141.0 8.0 L 165.1 26.4 L 157.1 59.0 Z","venues":{"2014":{"town":"Kuopio","x":140.0,"y":345.1},"2015":{"town":"Paimio","x":46.3,"y":457.9},"2016":{"town":"Lappeenranta","x":149.5,"y":430.0},"2017":{"town":"Joensuu","x":179.1,"y":358.5},"2018":{"town":"Hollola","x":99.3,"y":430.9},"2019":{"town":"Kangasala","x":72.3,"y":411.2},"2024":{"town":"Lapua","x":52.2,"y":341.4},"2025":{"town":"Mikkeli","x":132.4,"y":400.8},"2026":{"town":"Kotka","x":126.2,"y":457.4}}};
 
 /* ---------- helpers ---------- */
 const stripAccents = (s) => s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
@@ -239,6 +322,60 @@ function VenueMap({ events, onPick }) {
           );
         })}
       </div>
+    </div>
+  );
+}
+
+function MiniRoute({ points }) {
+  if (!points || points.length < 2) return null;
+  const kx = Math.cos(points[0].lat * Math.PI / 180);
+  const xs = points.map((p) => p.lng * kx), ys = points.map((p) => p.lat);
+  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+  const W = 120, H = 120, pad = 10;
+  const sx = (v) => pad + (v - minx) / ((maxx - minx) || 1) * (W - 2 * pad);
+  const sy = (v) => pad + (maxy - v) / ((maxy - miny) || 1) * (H - 2 * pad);
+  const d = points.map((p, i) => `${i ? "L" : "M"} ${sx(p.lng * kx).toFixed(1)} ${sy(p.lat).toFixed(1)}`).join(" ");
+  return <svg viewBox={`0 0 ${W} ${H}`} className="miniroute"><path d={d} fill="none" stroke="var(--yellow)" strokeWidth="2" strokeLinejoin="round" /></svg>;
+}
+
+function TrackMap({ track }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current || !track) return;
+    const pts = track.points.map((p) => [p.lat, p.lng]);
+    const map = L.map(ref.current, { scrollWheelZoom: false });
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 18, attribution: "© OpenStreetMap" }).addTo(map);
+    const line = L.polyline(pts, { color: "#ffe600", weight: 4, opacity: 0.95 }).addTo(map);
+    L.circleMarker(pts[0], { radius: 6, color: "#ff7e2e", fillColor: "#ff7e2e", fillOpacity: 1 }).addTo(map);
+    L.circleMarker(pts[pts.length - 1], { radius: 6, color: "#46c08a", fillColor: "#46c08a", fillOpacity: 1 }).addTo(map);
+    map.fitBounds(line.getBounds(), { padding: [22, 22] });
+    return () => map.remove();
+  }, [track]);
+  return <div ref={ref} className="lmap" />;
+}
+
+function TrackView({ pkey, year, leg, m, tracks, go }) {
+  const p = m.participants.find((x) => x.key === pkey);
+  const e = m.events.find((x) => x.year === year);
+  const l = e && e.legs.find((x) => x.leg === leg);
+  const t = tracks[trackKey(pkey, year, leg)];
+  return (
+    <div className="stack">
+      <button className="back" onClick={() => go({ type: "profile", key: pkey })}>← {p ? p.display : "Profile"}</button>
+      <section className="hero compact">
+        <p className="eyebrow">{shortComp(e?.competition)} · leg {leg}</p>
+        <h1 className="title sm">{l ? l.runner : p?.display} · route</h1>
+        <div className="stats">
+          <Stat k="Leg time" v={l ? l.leg_time : "—"} />
+          <Stat k="GPS distance" v={t ? `${t.distanceKm}` : "—"} sub="km on the watch" />
+          <Stat k="Straight leg" v={l && l.distance_km ? `${l.distance_km}` : "—"} sub="km official" />
+          <Stat k="Points" v={t ? t.points.length : "—"} />
+        </div>
+      </section>
+      <section className="panel">
+        {t ? <TrackMap track={t} /> : <p className="muted">No GPS track for this leg yet.</p>}
+        <p className="muted small">Recorded route on OpenStreetMap — start in orange, finish in green. The GPS distance runs longer than the official leg because of route choice and satellite wander.</p>
+      </section>
     </div>
   );
 }
@@ -543,12 +680,31 @@ function EventView({ year, m, go }) {
   );
 }
 
-function Profile({ pkey, m, go }) {
+function Profile({ pkey, m, go, tracks, onSaveTrack }) {
   const p = m.participants.find((x) => x.key === pkey);
+  const fileRef = useRef(null);
+  const [up, setUp] = useState(null);      // {year, leg}
+  const [cand, setCand] = useState(null);  // parsed candidate or {error}
+  const [busy, setBusy] = useState(false);
+  const openUploader = (e) => { setCand(null); setUp({ year: e.year, leg: e.leg }); setTimeout(() => fileRef.current && fileRef.current.click(), 0); };
+  const onFile = async (ev) => {
+    const f = ev.target.files[0]; ev.target.value = "";
+    if (!f) return;
+    try { setCand(buildTrack(await f.text())); }
+    catch (err) { setCand({ error: String(err.message || err) }); }
+  };
+  const save = async () => {
+    setBusy(true);
+    try {
+      await onSaveTrack({ runnerKey: p.key, year: up.year, leg: up.leg, points: cand.points, distanceKm: cand.distanceKm, durationS: cand.durationS });
+      setUp(null); setCand(null);
+    } catch (e) { setCand({ ...cand, error: String(e.message || e) }); }
+    finally { setBusy(false); }
+  };
   if (!p) return null;
-  const maxField = Math.max(...p.entries.map((e) => e.leg_field || 1));
   return (
     <div className="stack">
+      <input ref={fileRef} type="file" accept=".gpx,application/gpx+xml" onChange={onFile} style={{ display: "none" }} />
       <button className="back" onClick={() => go({ type: "home" })}>← Roster</button>
       <section className="hero compact">
         <div className="avatar big">{stripAccents(p.display).split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()}</div>
@@ -584,20 +740,51 @@ function Profile({ pkey, m, go }) {
         <div className="ptable">
           {[...p.entries].sort((a, b) => b.year - a.year || a.leg - b.leg).map((e) => {
             const pct = e.leg_rank && e.leg_field ? 1 - e.leg_rank / e.leg_field : 0;
+            const tk = tracks[trackKey(p.key, e.year, e.leg)];
             return (
-              <button className="prow" key={`${e.year}-${e.leg}`} onClick={() => go({ type: "event", year: e.year })}>
-                <span className="mono pyear">{e.year}</span>
-                <span className="pcomp">{shortComp(e.competition)}</span>
-                <span className="mono pleg">L{e.leg} · {e.distance_km ? e.distance_km.toFixed(1) : "—"}km</span>
-                <span className={`mono ptime ${!e.official ? "dnf-txt" : ""}`}>{e.official ? e.leg_time : `(${e.leg_time})`}</span>
-                <span className="pbar"><span className="pbar-fill" style={{ width: `${Math.max(pct * 100, 2)}%` }} /></span>
-                <span className="mono prank muted">{e.leg_rank ? `${e.leg_rank}/${e.leg_field}` : "—"}</span>
-              </button>
+              <div className="prow" key={`${e.year}-${e.leg}`}>
+                <button className="prow-main" onClick={() => go({ type: "event", year: e.year })}>
+                  <span className="mono pyear">{e.year}</span>
+                  <span className="pcomp">{shortComp(e.competition)}</span>
+                  <span className="mono pleg">L{e.leg} · {e.distance_km ? e.distance_km.toFixed(1) : "—"}km</span>
+                  <span className={`mono ptime ${!e.official ? "dnf-txt" : ""}`}>{e.official ? e.leg_time : `(${e.leg_time})`}</span>
+                  <span className="pbar"><span className="pbar-fill" style={{ width: `${Math.max(pct * 100, 2)}%` }} /></span>
+                  <span className="mono prank muted">{e.leg_rank ? `${e.leg_rank}/${e.leg_field}` : "—"}</span>
+                </button>
+                {tk
+                  ? <button className="gpsbtn has" title="View GPS route" onClick={() => go({ type: "track", key: p.key, year: e.year, leg: e.leg })}>↳ map</button>
+                  : <button className="gpsbtn" title="Add a GPS track" onClick={() => openUploader(e)}>+ GPS</button>}
+              </div>
             );
           })}
         </div>
-        <p className="muted small">Bar length = field-relative leg placing (longer is better). Courses differ each year, so it's a fairer cross-year read than raw time.</p>
+        <p className="muted small">Bar length = field-relative leg placing (longer is better). Tap "+ GPS" on a run to add your recorded route (export GPX from Garmin Connect); "↳ map" opens it.</p>
       </section>
+
+      {up && (
+        <div className="uploader" onClick={(ev) => { if (ev.target === ev.currentTarget && !busy) { setUp(null); setCand(null); } }}>
+          <div className="up-card">
+            <div className="up-head">Add GPS · leg {up.leg} · {up.year}</div>
+            {!cand && <p className="muted small">Choose a .gpx file…</p>}
+            {cand && cand.error && <p className="dnf-txt small">{cand.error}<br />Pick another file or cancel.</p>}
+            {cand && !cand.error && (
+              <div className="up-prev">
+                <MiniRoute points={cand.points} />
+                <div className="up-stats mono">
+                  <div>{cand.distanceKm} km</div>
+                  <div>{cand.durationS ? hms(cand.durationS) : "—"}</div>
+                  <div className="muted">{cand.points.length} pts</div>
+                </div>
+              </div>
+            )}
+            <div className="up-actions">
+              <button className="up-btn ghost" onClick={() => { if (!busy) { setUp(null); setCand(null); } }}>Cancel</button>
+              {cand && cand.error && <button className="up-btn" onClick={() => fileRef.current && fileRef.current.click()}>Choose file</button>}
+              {cand && !cand.error && <button className="up-btn save" disabled={busy} onClick={save}>{busy ? "Saving…" : "Save route"}</button>}
+            </div>
+          </div>
+        </div>
+      )}
       <section className="panel">
         <h2 className="h2">Other runners</h2>
         <div className="roster">
@@ -825,7 +1012,13 @@ function CompareView({ m }) {
 export default function App() {
   const m = useModel();
   const [view, setView] = useState({ type: "home" });
+  const [tracks, setTracks] = useState({});
   const go = (v) => { setView(v); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  useEffect(() => { loadTracks().then(setTracks).catch((e) => console.warn("Track load failed:", e)); }, []);
+  const onSaveTrack = async (t) => {
+    await saveTrack(t);
+    setTracks((prev) => ({ ...prev, [trackKey(t.runnerKey, t.year, t.leg)]: { ...t, createdAt: Date.now() } }));
+  };
 
   return (
     <div className="app">
@@ -844,7 +1037,8 @@ export default function App() {
       <main className="wrap">
         {view.type === "home" && <Home m={m} go={go} />}
         {view.type === "event" && <EventView year={view.year} m={m} go={go} />}
-        {view.type === "profile" && <Profile pkey={view.key} m={m} go={go} />}
+        {view.type === "profile" && <Profile pkey={view.key} m={m} go={go} tracks={tracks} onSaveTrack={onSaveTrack} />}
+        {view.type === "track" && <TrackView pkey={view.key} year={view.year} leg={view.leg} m={m} tracks={tracks} go={go} />}
         {view.type === "compare" && <CompareView m={m} />}
         {view.type === "live" && <LiveView />}
       </main>
@@ -1009,9 +1203,23 @@ function Style() {
 
 /* profile table */
 .ptable{display:flex;flex-direction:column;gap:7px}
-.prow{display:grid;grid-template-columns:48px 1fr 56px 88px 90px 70px;gap:10px;align-items:center;
-  background:rgba(0,0,0,.16);border:1px solid var(--hair);border-radius:11px;padding:11px 13px;cursor:pointer;color:var(--ink);text-align:left}
+.prow{display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.16);border:1px solid var(--hair);border-radius:11px;padding:6px 8px 6px 13px}
 .prow:hover{border-color:var(--yellow)}
+.prow-main{flex:1;min-width:0;display:grid;grid-template-columns:48px 1fr 56px 88px 90px 70px;gap:10px;align-items:center;background:none;border:0;color:var(--ink);text-align:left;cursor:pointer;padding:6px 0}
+.gpsbtn{flex:none;font-family:var(--mono);font-size:11px;padding:6px 9px;border-radius:8px;border:1px solid var(--hair);background:none;color:var(--muted);cursor:pointer;white-space:nowrap}
+.gpsbtn:hover{color:var(--ink);border-color:var(--yellow)}
+.gpsbtn.has{color:var(--yellow);border-color:rgba(255,230,0,.4)}
+.miniroute{width:104px;height:104px;flex:none;background:rgba(0,0,0,.3);border:1px solid var(--hair);border-radius:10px}
+.lmap{height:430px;border-radius:14px;overflow:hidden;border:1px solid var(--hair)}
+.uploader{position:fixed;inset:0;background:rgba(0,0,0,.62);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
+.up-card{background:var(--bg2);border:1px solid var(--hair);border-radius:16px;padding:22px;max-width:340px;width:100%}
+.up-head{font-family:var(--disp);font-weight:700;font-size:16px;margin-bottom:12px}
+.up-prev{display:flex;gap:14px;align-items:center;margin:6px 0 16px}
+.up-stats{display:flex;flex-direction:column;gap:5px;font-size:16px}
+.up-actions{display:flex;gap:8px;justify-content:flex-end}
+.up-btn{font-family:var(--mono);font-size:13px;padding:9px 14px;border-radius:9px;border:1px solid var(--hair);background:none;color:var(--ink);cursor:pointer}
+.up-btn.save{background:var(--yellow);color:#111;border-color:var(--yellow);font-weight:600}
+.up-btn.ghost{color:var(--muted)} .up-btn:disabled{opacity:.6}
 .pyear{font-weight:600} .pcomp{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pleg{font-size:12px;color:var(--muted)} .ptime{text-align:right;font-size:13.5px}
 .pbar{height:7px;border-radius:4px;background:rgba(255,255,255,.06);overflow:hidden}
@@ -1067,8 +1275,8 @@ function Style() {
   .tr span:nth-child(5){display:none}
   .leg{grid-template-columns:30px 1fr 80px 80px}
   .leg-rank{display:none}
-  .prow{grid-template-columns:42px 1fr 70px 60px}
-  .prow .pcomp,.prow .pbar{display:none}
+  .prow-main{grid-template-columns:42px 1fr 70px 60px}
+  .prow-main .pcomp,.prow-main .pbar{display:none}
 }
 `}</style>
   );
