@@ -1220,7 +1220,7 @@ function Style() {
 .ptable{display:flex;flex-direction:column;gap:7px}
 .prow{display:flex;align-items:center;gap:8px;background:rgba(0,0,0,.16);border:1px solid var(--hair);border-radius:11px;padding:6px 8px 6px 13px}
 .prow:hover{border-color:var(--yellow)}
-.prow-main{flex:1;min-width:0;display:grid;grid-template-columns:48px 1fr 56px 88px 90px 70px;gap:10px;align-items:center;background:none;border:0;color:var(--ink);text-align:left;cursor:pointer;padding:6px 0}
+.prow-main{flex:1;min-width:0;display:grid;grid-template-columns:48px minmax(0,1fr) 56px 88px 90px 70px;gap:10px;align-items:center;background:none;border:0;color:var(--ink);text-align:left;cursor:pointer;padding:6px 0}
 .gpsbtn{flex:none;font-family:var(--mono);font-size:11px;padding:6px 9px;border-radius:8px;border:1px solid var(--hair);background:none;color:var(--muted);cursor:pointer;white-space:nowrap}
 .gpsbtn:hover{color:var(--ink);border-color:var(--yellow)}
 .gpsbtn.has{color:var(--yellow);border-color:rgba(255,230,0,.4)}
@@ -1236,10 +1236,10 @@ function Style() {
 .up-btn.save{background:var(--yellow);color:#111;border-color:var(--yellow);font-weight:600}
 .up-btn.ghost{color:var(--muted)} .up-btn:disabled{opacity:.6}
 .pyear{font-weight:600} .pcomp{font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.pleg{font-size:12px;color:var(--muted)} .ptime{text-align:right;font-size:13.5px}
+.pleg{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0} .ptime{text-align:right;font-size:13.5px;white-space:nowrap}
 .pbar{height:7px;border-radius:4px;background:rgba(255,255,255,.06);overflow:hidden}
 .pbar-fill{display:block;height:100%;background:linear-gradient(90deg,var(--yellow-d),var(--yellow))}
-.prank{text-align:right;font-size:12px}
+.prank{text-align:right;font-size:12px;white-space:nowrap}
 
 .benchmark{display:flex;align-items:center;gap:14px;flex-wrap:wrap;background:linear-gradient(90deg,rgba(255,126,46,.10),rgba(255,126,46,.02));
   border:1px solid rgba(255,126,46,.28);border-radius:14px;padding:14px 18px}
@@ -1290,8 +1290,11 @@ function Style() {
   .tr span:nth-child(5){display:none}
   .leg{grid-template-columns:30px 1fr 80px 80px}
   .leg-rank{display:none}
-  .prow-main{grid-template-columns:42px 1fr 70px 60px}
+  .prow-main{grid-template-columns:34px minmax(0,1fr) auto auto;gap:7px}
   .prow-main .pcomp,.prow-main .pbar{display:none}
+  .prow{padding:5px 7px 5px 11px}
+  .prow-main .ptime,.prow-main .prank{font-size:12px}
+  .gpsbtn{font-size:10px;padding:6px 7px}
 }
 `}</style>
   );
