@@ -361,7 +361,7 @@ function TrackView({ pkey, year, leg, m, tracks, go }) {
   const t = tracks[trackKey(pkey, year, leg)];
   return (
     <div className="stack">
-      <button className="back" onClick={() => go({ type: "profile", key: pkey })}>← {p ? p.display : "Profile"}</button>
+      <button className="back" onClick={() => go({ type: "profile", key: pkey })}>← Back to {p ? p.display : "profile"}</button>
       <section className="hero compact">
         <p className="eyebrow">{shortComp(e?.competition)} · leg {leg}</p>
         <h1 className="title sm">{l ? l.runner : p?.display} · route</h1>
@@ -569,7 +569,7 @@ function Home({ m, go }) {
   );
 }
 
-function EventView({ year, m, go }) {
+function EventView({ year, m, go, tracks }) {
   const e = m.events.find((x) => x.year === year);
   const [open, setOpen] = useState(null);
   const series = useMemo(() => {
@@ -649,7 +649,14 @@ function EventView({ year, m, go }) {
                   <button className={`leg-no mono tog ${isOpen ? "open" : ""}`} onClick={() => hasSplits && setOpen(isOpen ? null : l.leg)} title={hasSplits ? "Show splits" : ""}>{l.leg}</button>
                   <div className="leg-mid">
                     <button className="leg-runner" onClick={() => go({ type: "profile", key: normName(l.runner) })}>{l.runner}</button>
-                    <span className="leg-dist mono">{l.distance_km ? `${l.distance_km.toFixed(1)} km` : ""}</span>
+                    <span className="leg-dist mono">
+                      {l.distance_km ? `${l.distance_km.toFixed(1)} km` : ""}
+                      {tracks[trackKey(normName(l.runner), e.year, l.leg)] && (
+                        <button className="ran-link" onClick={() => go({ type: "track", key: normName(l.runner), year: e.year, leg: l.leg })}>
+                          · ran {tracks[trackKey(normName(l.runner), e.year, l.leg)].distanceKm} km ↳
+                        </button>
+                      )}
+                    </span>
                   </div>
                   <div className="leg-time mono">{l.official ? l.leg_time : `(${l.leg_time})`}</div>
                   <div className="leg-rank mono muted">{l.leg_rank ? `${l.leg_rank}/${l.leg_field}` : "—"}</div>
@@ -1013,8 +1020,14 @@ export default function App() {
   const m = useModel();
   const [view, setView] = useState({ type: "home" });
   const [tracks, setTracks] = useState({});
-  const go = (v) => { setView(v); window.scrollTo({ top: 0, behavior: "smooth" }); };
+  const go = (v) => { window.history.pushState(v, ""); setView(v); window.scrollTo({ top: 0, behavior: "smooth" }); };
   useEffect(() => { loadTracks().then(setTracks).catch((e) => console.warn("Track load failed:", e)); }, []);
+  useEffect(() => {
+    window.history.replaceState({ type: "home" }, "");
+    const onPop = (e) => { setView(e.state || { type: "home" }); window.scrollTo({ top: 0 }); };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   const onSaveTrack = async (t) => {
     await saveTrack(t);
     setTracks((prev) => ({ ...prev, [trackKey(t.runnerKey, t.year, t.leg)]: { ...t, createdAt: Date.now() } }));
@@ -1036,7 +1049,7 @@ export default function App() {
       </header>
       <main className="wrap">
         {view.type === "home" && <Home m={m} go={go} />}
-        {view.type === "event" && <EventView year={view.year} m={m} go={go} />}
+        {view.type === "event" && <EventView year={view.year} m={m} go={go} tracks={tracks} />}
         {view.type === "profile" && <Profile pkey={view.key} m={m} go={go} tracks={tracks} onSaveTrack={onSaveTrack} />}
         {view.type === "track" && <TrackView pkey={view.key} year={view.year} leg={view.leg} m={m} tracks={tracks} go={go} />}
         {view.type === "compare" && <CompareView m={m} />}
@@ -1195,6 +1208,8 @@ function Style() {
 .leg-no{width:28px;height:28px;border-radius:50%;border:2px solid var(--yellow);display:grid;place-items:center;font-size:13px;font-weight:600}
 .leg-mid{display:flex;flex-direction:column;gap:1px;min-width:0}
 .leg-dist{font-size:11px;color:var(--muted)}
+.ran-link{background:none;border:0;color:var(--yellow);cursor:pointer;font-family:var(--mono);font-size:11px;padding:0;margin-left:5px}
+.ran-link:hover{text-decoration:underline}
 .leg-runner{background:none;border:0;color:var(--ink);text-align:left;cursor:pointer;font-size:14.5px;font-weight:500;padding:0}
 .leg-runner:hover{color:var(--yellow)}
 .leg-time{text-align:right;font-size:14px} .leg-rank{text-align:right;font-size:12px}
