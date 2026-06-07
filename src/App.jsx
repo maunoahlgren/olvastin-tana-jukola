@@ -103,6 +103,22 @@ const hms = (s) => {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
 };
+const MASS_START = 23 * 3600; // Jukola mass start 23:00
+const clockAt = (cumSec) => {
+  if (cumSec == null) return null;
+  const t = Math.round(MASS_START + cumSec) % 86400;
+  return `${String(Math.floor(t / 3600)).padStart(2, "0")}:${String(Math.floor((t % 3600) / 60)).padStart(2, "0")}`;
+};
+// Jukola's official pre-race per-leg time estimates (minutes), from each year's event invitation
+const JUKOLA_ESTIMATES = {
+  2014: [70, 83, 71, 48, 46, 70, 89], 2015: [80, 73, 94, 45, 46, 70, 79],
+  2016: [60, 74, 88, 47, 48, 70, 91], 2017: [75, 88, 70, 45, 45, 64, 80],
+  2018: [67, 73, 78, 47, 47, 60, 84], 2019: [69, 70, 87, 47, 48, 68, 77],
+  2024: [72, 76, 68, 51, 49, 66, 78], 2025: [73, 64, 79, 37, 37, 68, 90],
+  2026: [73, 63, 82, 40, 42, 63, 84],
+};
+const estLegS = (year, leg) => (JUKOLA_ESTIMATES[year] && JUKOLA_ESTIMATES[year][leg - 1] != null ? JUKOLA_ESTIMATES[year][leg - 1] * 60 : null);
+const estTotalS = (year) => (JUKOLA_ESTIMATES[year] ? JUKOLA_ESTIMATES[year].reduce((a, b) => a + b, 0) * 60 : null);
 
 /* ---------- live 2026 feed ----------
    Source: Tulospalvelu "online" JSON, CORS-open (access-control-allow-origin: *),
@@ -220,16 +236,23 @@ function useModel() {
       return { ...p, display, entries, appearances: entries.length, years: new Set(entries.map((e) => e.year)).size, fastest, bestLeg, favLeg, legCount, avgPct, bestPct, totalKm, avgKm, paceS };
     }).sort((a, b) => b.appearances - a.appearances || a.display.localeCompare(b.display));
 
-    const chart = events.map((e) => ({
-      year: e.year,
-      hours: e.status === "finished" ? +(e.final_time_s / 3600).toFixed(2) : 0,
-      winnerHours: +(e.winner_time_s / 3600).toFixed(2),
-      winnerTeam: e.winner_team,
-      winnerTime: e.winner_time,
-      ratio: e.status === "finished" ? e.final_time_s / e.winner_time_s : null,
-      dnf: e.status !== "finished",
-      label: e.status === "finished" ? e.final_time : "DNF",
-    }));
+    const chart = events.map((e) => {
+      const theoS = estTotalS(e.year);
+      return {
+        year: e.year,
+        hours: e.status === "finished" ? +(e.final_time_s / 3600).toFixed(2) : 0,
+        winnerHours: +(e.winner_time_s / 3600).toFixed(2),
+        winnerTeam: e.winner_team,
+        winnerTime: e.winner_time,
+        ratio: e.status === "finished" ? e.final_time_s / e.winner_time_s : null,
+        finalS: e.status === "finished" ? e.final_time_s : null,
+        theoHours: theoS ? +(theoS / 3600).toFixed(2) : null,
+        theoS,
+        theoLabel: theoS ? hms(theoS) : null,
+        dnf: e.status !== "finished",
+        label: e.status === "finished" ? e.final_time : "DNF",
+      };
+    });
 
     const bestRatio = finished
       .map((e) => ({ e, ratio: e.final_time_s / e.winner_time_s }))
@@ -248,6 +271,12 @@ function useModel() {
     const mostLegs = participants[0];
     const mostKm = [...participants].sort((a, b) => b.totalKm - a.totalKm)[0];
 
+    const legNums = [1, 2, 3, 4, 5, 6, 7];
+    const avgChangeovers = legNums.map((n) => {
+      const cums = events.map((e) => e.legs.find((l) => l.leg === n)).filter((l) => l && l.cumulative_time_s).map((l) => l.cumulative_time_s);
+      return { leg: n, avgCumS: cums.length ? cums.reduce((a, b) => a + b, 0) / cums.length : null, count: cums.length };
+    });
+
     let s14Km = 0, s14S = 0, longestLeg = null;
     events.forEach((e) => e.legs.forEach((l) => {
       if (l.distance_km) s14Km += l.distance_km;
@@ -256,7 +285,7 @@ function useModel() {
     }));
     const since2014 = { totalKm: s14Km, totalS: s14S, jukolas: events.length, runners: participants.length, longestLeg };
 
-    return { events, finished, bestTime, bestPlace, fastestLeg, participants, chart, bestRatio, fastestByLeg, biggestGain, mostLegs, mostKm, since2014 };
+    return { events, finished, bestTime, bestPlace, fastestLeg, participants, chart, bestRatio, fastestByLeg, biggestGain, mostLegs, mostKm, since2014, avgChangeovers };
   }, []);
 }
 
@@ -430,6 +459,19 @@ function Home({ m, go }) {
       </section>
 
       <section className="panel">
+        <h2 className="h2">A typical night</h2>
+        <p className="muted small">When the baton tends to change hands, averaged across our finished Jukolas — mass start 23:00.</p>
+        <div className="night-grid">
+          {m.avgChangeovers.map((c) => (
+            <div className="night-c" key={c.leg}>
+              <div className="night-t mono">{clockAt(c.avgCumS) || "—"}</div>
+              <div className="night-k">{c.leg === 7 ? "Finish" : `Leg ${c.leg}`}</div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="panel">
         <h2 className="h2">Olvastin Tana vs. the winner</h2>
         <div style={{ width: "100%", height: 300 }}>
           <ResponsiveContainer>
@@ -447,7 +489,9 @@ function Home({ m, go }) {
                       <div style={{ color: "var(--yellow)" }}>Olvastin Tana: {d.label}</div>
                       <div style={{ color: "var(--orange)" }}>Winner: {d.winnerTime}</div>
                       <div style={{ color: "var(--muted)", fontSize: 11 }}>{d.winnerTeam}</div>
-                      {d.ratio && <div style={{ color: "var(--muted)", marginTop: 3 }}>{d.ratio.toFixed(2)}× winning time</div>}
+                      {d.theoLabel && <div style={{ color: "#7fb6ff", marginTop: 3 }}>Jukola estimate: {d.theoLabel}</div>}
+                      {d.ratio && <div style={{ color: "var(--muted)" }}>{d.ratio.toFixed(2)}× winning time</div>}
+                      {d.finalS && d.theoS && <div style={{ color: "var(--muted)" }}>+{hms(d.finalS - d.theoS)} over estimate</div>}
                     </div>
                   );
                 }} />
@@ -457,10 +501,10 @@ function Home({ m, go }) {
                 {m.chart.map((d, i) => <Cell key={i} fill={d.dnf ? "var(--bg2)" : "var(--yellow)"} stroke={d.dnf ? "var(--red)" : "none"} strokeDasharray={d.dnf ? "3 3" : "0"} />)}
               </Bar>
               <Line type="monotone" dataKey="winnerHours" name="Winner" stroke="var(--orange)" strokeWidth={2} dot={{ r: 3, fill: "var(--orange)" }} activeDot={{ r: 5 }} />
-            </ComposedChart>
+              <Line type="monotone" dataKey="theoHours" name="Jukola estimate" stroke="#7fb6ff" strokeWidth={1.8} strokeDasharray="5 4" dot={{ r: 2.5, fill: "#7fb6ff" }} activeDot={{ r: 4 }} />            </ComposedChart>
           </ResponsiveContainer>
         </div>
-        <p className="muted small">The winner's time (amber) sets the year's benchmark — it absorbs how long and how rough each course was, so the gap to it compares far better across years than raw time. Olvastin Tana's relatively closest run was {m.bestRatio && shortComp(m.bestRatio.e.competition)} ({m.bestRatio && m.bestRatio.ratio.toFixed(2)}× the winner). 2024 (Lakia) was a leg-2 disqualification, so there's no classified finish that year.</p>
+        <p className="muted small">The winner's time (amber) sets the year's benchmark — it absorbs how long and how rough each course was, so the gap to it compares far better across years than raw time. Olvastin Tana's relatively closest run was {m.bestRatio && shortComp(m.bestRatio.e.competition)} ({m.bestRatio && m.bestRatio.ratio.toFixed(2)}× the winner). 2024 (Lakia) was a leg-2 disqualification, so there's no classified finish that year. The dashed blue line is Jukola's own pre-race time estimate — the organizers' leg-by-leg guideline (around the expected winning pace) — so you can read both gaps at once: how far each night ran over the estimate, and how the estimate compares to the actual winner.</p>
       </section>
 
       <section className="panel">
@@ -609,6 +653,20 @@ function EventView({ year, m, go, tracks }) {
         )}
       </div>
 
+      {estTotalS(e.year) && (
+        <div className="benchmark est-bm">
+          <span className="bm-flag est" aria-hidden />
+          <div className="bm-main">
+            <span className="bm-k est-k">Jukola estimate</span>
+            <span className="bm-team">Organizers' pre-race guideline</span>
+          </div>
+          <span className="bm-time mono est-t">{hms(estTotalS(e.year))}</span>
+          {e.status === "finished" && (
+            <span className="bm-ratio mono">Olvastin Tana · +{hms(e.final_time_s - estTotalS(e.year))} over</span>
+          )}
+        </div>
+      )}
+
       {series.length > 1 && (
         <section className="panel">
           <h2 className="h2">Position through the race</h2>
@@ -645,24 +703,23 @@ function EventView({ year, m, go, tracks }) {
             const isOpen = open === l.leg;
             return (
               <div key={l.leg}>
-                <div className="leg">
+                <div className="leg2">
                   <button className={`leg-no mono tog ${isOpen ? "open" : ""}`} onClick={() => hasSplits && setOpen(isOpen ? null : l.leg)} title={hasSplits ? "Show splits" : ""}>{l.leg}</button>
-                  <div className="leg-mid">
-                    <button className="leg-runner" onClick={() => go({ type: "profile", key: normName(l.runner) })}>{l.runner}</button>
-                    <span className="leg-dist mono">
-                      {l.distance_km ? `${l.distance_km.toFixed(1)} km` : ""}
+                  <div className="leg-body">
+                    <div className="leg-row1">
+                      <button className="leg-runner" onClick={() => go({ type: "profile", key: normName(l.runner) })}>{l.runner}</button>
+                      <span className="leg-time2 mono">{l.official ? l.leg_time : `(${l.leg_time})`}</span>
+                    </div>
+                    <div className="leg-meta mono">
+                      {l.distance_km ? <span>{l.distance_km.toFixed(1)} km</span> : null}
+                      {estLegS(e.year, l.leg) && <span className="est">est {hms(estLegS(e.year, l.leg))}</span>}
+                      {clockAt(l.cumulative_time_s) && <span className="co">→ {clockAt(l.cumulative_time_s)}</span>}
+                      {l.leg_rank ? <span>leg {l.leg_rank}/{l.leg_field}</span> : null}
+                      {l.cumulative_place ? <span>{l.cumulative_place} overall{(up || down) && <em className={up ? "up" : "down"}>{up ? "▲" : "▼"}{Math.abs(l.place_change)}</em>}</span> : null}
                       {tracks[trackKey(normName(l.runner), e.year, l.leg)] && (
-                        <button className="ran-link" onClick={() => go({ type: "track", key: normName(l.runner), year: e.year, leg: l.leg })}>
-                          · ran {tracks[trackKey(normName(l.runner), e.year, l.leg)].distanceKm} km ↳
-                        </button>
+                        <button className="ran-link" onClick={() => go({ type: "track", key: normName(l.runner), year: e.year, leg: l.leg })}>ran {tracks[trackKey(normName(l.runner), e.year, l.leg)].distanceKm} km ↳</button>
                       )}
-                    </span>
-                  </div>
-                  <div className="leg-time mono">{l.official ? l.leg_time : `(${l.leg_time})`}</div>
-                  <div className="leg-rank mono muted">{l.leg_rank ? `${l.leg_rank}/${l.leg_field}` : "—"}</div>
-                  <div className="leg-cum mono">
-                    {l.cumulative_place ? l.cumulative_place : "—"}
-                    {(up || down) && <span className={up ? "up" : "down"}>{up ? "▲" : "▼"}{Math.abs(l.place_change)}</span>}
+                    </div>
                   </div>
                 </div>
                 {isOpen && hasSplits && (
@@ -681,6 +738,7 @@ function EventView({ year, m, go, tracks }) {
             );
           })}
         </div>
+        <p className="muted small">Each row: leg time on the right; below it the leg length, <span style={{ color: "var(--yellow)" }}>→ the clock time at changeover</span> (mass start 23:00), the position on that leg, and the team's overall position with its gain/loss.</p>
         {e.status !== "finished" && <p className="muted small">Times in parentheses were recorded but not classified — the team was disqualified earlier in the relay.</p>}
       </section>
     </div>
@@ -1218,6 +1276,18 @@ html,body{overflow-x:hidden;max-width:100%;background:var(--bg)}
 .leg-time{text-align:right;font-size:14px} .leg-rank{text-align:right;font-size:12px}
 .leg-cum{text-align:right;font-size:13px;display:flex;gap:6px;justify-content:flex-end;align-items:baseline}
 .up{color:var(--green);font-size:11px} .down{color:var(--red);font-size:11px}
+.leg2{display:flex;align-items:flex-start;gap:12px;background:rgba(0,0,0,.16);border:1px solid var(--hair);border-radius:11px;padding:11px 13px}
+.leg-body{flex:1;min-width:0}
+.leg-row1{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+.leg-time2{font-size:15px;white-space:nowrap;flex:none}
+.leg-meta{display:flex;flex-wrap:wrap;gap:3px 12px;margin-top:5px;font-size:11.5px;color:var(--muted)}
+.leg-meta .co{color:var(--yellow)}
+.leg-meta .est{color:#7fb6ff}
+.est-bm{background:linear-gradient(90deg,rgba(127,182,255,.10),rgba(127,182,255,.02));border-color:rgba(127,182,255,.28)}
+.est-k{color:#7fb6ff} .est-t{color:#7fb6ff} .bm-flag.est{background:#7fb6ff;border-color:#7fb6ff}
+.leg-meta em{font-style:normal;margin-left:4px}
+.leg-meta .up,.leg-meta .down{font-size:11.5px}
+.leg-meta .ran-link{font-size:11.5px;margin-left:0}
 
 /* profile table */
 .ptable{display:flex;flex-direction:column;gap:7px}
@@ -1267,10 +1337,14 @@ html,body{overflow-x:hidden;max-width:100%;background:var(--bg)}
 .cmp-v{font-size:15px;text-align:center}
 .cmp-v.win{color:var(--yellow);font-weight:600}
 .cmp-k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;white-space:nowrap}
-.s14-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.s14-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
 .s14-c{background:rgba(0,0,0,.16);border:1px solid var(--hair);border-radius:12px;padding:16px 14px;text-align:center}
 .s14-v{font-family:var(--disp);font-weight:800;font-size:34px;line-height:1;color:var(--yellow)}
 .s14-k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:8px}
+.night-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+.night-c{background:rgba(0,0,0,.16);border:1px solid var(--hair);border-radius:10px;padding:12px 5px;text-align:center}
+.night-t{font-size:16px;font-weight:600;color:var(--yellow)}
+.night-k{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:5px}
 .venuemap{display:grid;grid-template-columns:200px 1fr;gap:20px;align-items:start}
 .fmap{width:100%;max-width:200px;height:auto}
 .fmap-land{fill:rgba(255,255,255,.05);stroke:var(--hair);stroke-width:1}
@@ -1283,7 +1357,7 @@ html,body{overflow-x:hidden;max-width:100%;background:var(--bg)}
 .vchip-y{font-weight:600} .vchip-t{font-size:14px}
 .vchip-r{font-size:12px;color:var(--muted)}
 .vchip.next .vchip-r{color:var(--orange)} .vchip.dnf .vchip-r{color:var(--red)}
-@media(max-width:560px){.s14-grid{grid-template-columns:repeat(2,1fr)}.venuemap{grid-template-columns:1fr}.fmap{max-width:160px;margin:0 auto;display:block}}
+@media(max-width:560px){.s14-grid{grid-template-columns:repeat(2,1fr)}.venuemap{grid-template-columns:1fr}.fmap{max-width:160px;margin:0 auto;display:block}.night-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
 
 @media(max-width:640px){
   .stats{grid-template-columns:repeat(2,minmax(0,1fr))}
