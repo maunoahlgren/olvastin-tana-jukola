@@ -119,6 +119,24 @@ const JUKOLA_ESTIMATES = {
 };
 const estLegS = (year, leg) => (JUKOLA_ESTIMATES[year] && JUKOLA_ESTIMATES[year][leg - 1] != null ? JUKOLA_ESTIMATES[year][leg - 1] * 60 : null);
 const estTotalS = (year) => (JUKOLA_ESTIMATES[year] ? JUKOLA_ESTIMATES[year].reduce((a, b) => a + b, 0) * 60 : null);
+// Relay changeover closes Sun 09:15; runners still waiting restart (anchors 09:30, legs 2-6 09:45).
+const CLOSE_S = 10 * 3600 + 15 * 60, RESTART_ANCHOR_S = 10 * 3600 + 30 * 60, RESTART_OTHER_S = 10 * 3600 + 45 * 60;
+function changeoverInfo(legs) {
+  const res = {};
+  [...legs].sort((a, b) => a.leg - b.leg).forEach((l) => {
+    if (!l.leg_time_s) { res[l.leg] = null; return; }
+    let start, restart = false;
+    if (l.leg === 1) start = 0;
+    else {
+      const prev = res[l.leg - 1];
+      const nat = prev ? prev.finish : null;
+      if (nat != null && nat <= CLOSE_S) start = nat;
+      else { start = l.leg === 7 ? RESTART_ANCHOR_S : RESTART_OTHER_S; restart = true; }
+    }
+    res[l.leg] = { start, finish: start + l.leg_time_s, restart };
+  });
+  return res;
+}
 
 /* ---------- live 2026 feed ----------
    Source: Tulospalvelu "online" JSON, CORS-open (access-control-allow-origin: *),
@@ -273,8 +291,9 @@ function useModel() {
 
     const legNums = [1, 2, 3, 4, 5, 6, 7];
     const avgChangeovers = legNums.map((n) => {
-      const cums = events.map((e) => e.legs.find((l) => l.leg === n)).filter((l) => l && l.cumulative_time_s).map((l) => l.cumulative_time_s);
-      return { leg: n, avgCumS: cums.length ? cums.reduce((a, b) => a + b, 0) / cums.length : null, count: cums.length };
+      const fins = [];
+      events.forEach((e) => { if (e.status !== "finished") return; const ci = changeoverInfo(e.legs)[n]; if (ci) fins.push(ci.finish); });
+      return { leg: n, avgFinishS: fins.length ? fins.reduce((a, b) => a + b, 0) / fins.length : null, count: fins.length };
     });
 
     let s14Km = 0, s14S = 0, longestLeg = null;
@@ -460,11 +479,11 @@ function Home({ m, go }) {
 
       <section className="panel">
         <h2 className="h2">A typical night</h2>
-        <p className="muted small">When the baton tends to change hands, averaged across our finished Jukolas — mass start 23:00.</p>
+        <p className="muted small">When the baton actually changes hands, averaged across our finished Jukolas (mass start 23:00). The relay changeover closes at 09:15, so our slower late legs go in the morning mass restart — anchors at 09:30, legs 2–6 at 09:45 — which is why the night ends mid-morning.</p>
         <div className="night-grid">
           {m.avgChangeovers.map((c) => (
             <div className="night-c" key={c.leg}>
-              <div className="night-t mono">{clockAt(c.avgCumS) || "—"}</div>
+              <div className="night-t mono">{clockAt(c.avgFinishS) || "—"}</div>
               <div className="night-k">{c.leg === 7 ? "Finish" : `Leg ${c.leg}`}</div>
             </div>
           ))}
@@ -628,6 +647,7 @@ function EventView({ year, m, go, tracks }) {
     return pts;
   }, [e]);
   if (!e) return null;
+  const co = e.status === "finished" ? changeoverInfo(e.legs) : {};
   return (
     <div className="stack">
       <button className="back" onClick={() => go({ type: "home" })}>← All years</button>
@@ -713,7 +733,11 @@ function EventView({ year, m, go, tracks }) {
                     <div className="leg-meta mono">
                       {l.distance_km ? <span>{l.distance_km.toFixed(1)} km</span> : null}
                       {estLegS(e.year, l.leg) && <span className="est">est {hms(estLegS(e.year, l.leg))}</span>}
-                      {clockAt(l.cumulative_time_s) && <span className="co">→ {clockAt(l.cumulative_time_s)}</span>}
+                      {co[l.leg] && (
+                        co[l.leg].restart
+                          ? <span className="co restart" title={`Morning mass restart (${l.leg === 7 ? "anchors 09:30" : "legs 2–6 09:45"})`}>↻ {clockAt(co[l.leg].finish)}</span>
+                          : <span className="co">→ {clockAt(co[l.leg].finish)}</span>
+                      )}
                       {l.leg_rank ? <span>leg {l.leg_rank}/{l.leg_field}</span> : null}
                       {l.cumulative_place ? <span>{l.cumulative_place} overall{(up || down) && <em className={up ? "up" : "down"}>{up ? "▲" : "▼"}{Math.abs(l.place_change)}</em>}</span> : null}
                       {tracks[trackKey(normName(l.runner), e.year, l.leg)] && (
@@ -738,7 +762,7 @@ function EventView({ year, m, go, tracks }) {
             );
           })}
         </div>
-        <p className="muted small">Each row: leg time on the right; below it the leg length, <span style={{ color: "var(--yellow)" }}>→ the clock time at changeover</span> (mass start 23:00), the position on that leg, and the team's overall position with its gain/loss.</p>
+        <p className="muted small">Each row: leg time on the right; below it the leg length, Jukola's <span style={{ color: "#7fb6ff" }}>estimate</span>, <span style={{ color: "var(--yellow)" }}>→ the clock time at changeover</span> (mass start 23:00; <span style={{ color: "var(--orange)" }}>↻ = started in the morning mass restart</span> after the 09:15 changeover close), the position on that leg, and the team's overall position with its gain/loss.</p>
         {e.status !== "finished" && <p className="muted small">Times in parentheses were recorded but not classified — the team was disqualified earlier in the relay.</p>}
       </section>
     </div>
@@ -1282,6 +1306,7 @@ html,body{overflow-x:hidden;max-width:100%;background:var(--bg)}
 .leg-time2{font-size:15px;white-space:nowrap;flex:none}
 .leg-meta{display:flex;flex-wrap:wrap;gap:3px 12px;margin-top:5px;font-size:11.5px;color:var(--muted)}
 .leg-meta .co{color:var(--yellow)}
+.leg-meta .co.restart{color:var(--orange)}
 .leg-meta .est{color:#7fb6ff}
 .est-bm{background:linear-gradient(90deg,rgba(127,182,255,.10),rgba(127,182,255,.02));border-color:rgba(127,182,255,.28)}
 .est-k{color:#7fb6ff} .est-t{color:#7fb6ff} .bm-flag.est{background:#7fb6ff;border-color:#7fb6ff}
