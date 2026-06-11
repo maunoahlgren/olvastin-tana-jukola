@@ -104,6 +104,7 @@ const hms = (s) => {
   return h ? `${h}:${String(m).padStart(2, "0")}:${String(x).padStart(2, "0")}` : `${m}:${String(x).padStart(2, "0")}`;
 };
 const MASS_START = 23 * 3600; // Jukola mass start 23:00
+const parseHMS = (s) => { const m = String(s || "").match(/(\d+):(\d{2})(?::(\d{2}))?/); return m ? (+m[1]) * 3600 + (+m[2]) * 60 + (+(m[3] || 0)) : null; };
 const clockAt = (cumSec) => {
   if (cumSec == null) return null;
   const t = Math.round(MASS_START + cumSec) % 86400;
@@ -140,17 +141,17 @@ function changeoverInfo(legs) {
 
 /* ---------- live 2026 feed ----------
    Source: Tulospalvelu "online" JSON, CORS-open (access-control-allow-origin: *),
-   so the static site fetches it directly — no backend.
-   Confirmed endpoints + JSON schema (from the event's JsonFileFormats):
-     online_events_dt.json                 -> events list w/ CurrentRace + Online flags
-     online_{id}_startlist.json?ClubNameShort=  -> team + per-leg runner names
-     online_{id}_resultlist.json?Get=[...] -> OLBigRelayResult rows (live splits)
-     online_{id}_statuslist.json?a=ts      -> live change/refresh feed
-   Rows we read (OLBigRelayResult): RaceNo, Point, BaseBib, Name, TimeTotalStr,
-     RankTotal, DiffTotal, TimeRaceStr, RankRace, DiffRace.
-   NOTE: endpoints are empty until the race is live + lineups posted. The two
-   spots marked CONFIRM-WHEN-LIVE (class filter + result wrapper) are isolated
-   here so finalising them is a one-line change once real data appears. */
+   base https://online.jukola.fi/tulokset/online — confirmed correct via the SPA bundle.
+   Real shapes (verified against the live rehearsal event j2026_ke):
+     online_events_dt.json -> events list w/ CurrentRace + Online flags
+     online_{id}_startlist.json?ClubNameShort=NAME -> flat rows {Bib,BaseBib,Name,
+       ClubNameLong,ClassNameShort,ClassID}; one per team (the starter). Used to learn
+       our ClassNameShort.
+     online_{id}_resultlist.json?ClassNameShort=X&Point=0 -> interleaved rows: a
+       RaceNo:0 team header {BaseBib,ClubNameLong} followed by RaceNo:1..N leg rows
+       {Name, TotalResult, RaceResult, TotalRank, RaceRank, Status}. This carries both
+       the declared per-leg lineup (names) AND the live results.
+   Files are empty until lineups post / the race is live. */
 const LIVE = {
   base: "https://online.jukola.fi/tulokset/online",
   eventId: "j2026_ju",
@@ -159,7 +160,7 @@ const LIVE = {
   legs: 7,
   massStart: "2026-06-13T23:00:00+03:00",
   refreshMs: 75000,
-  resultsUrl: "https://online.jukola.fi/tulokset-new/fi/j2026_ju/",
+  resultsUrl: "https://online3.jukola.com/tulokset-new/fi/j2026_ju/",
 };
 
 async function getJSON(url) {
@@ -173,35 +174,52 @@ async function fetchEvent() {
   return (d.data || []).find((e) => e.EventID === LIVE.eventId) || null;
 }
 
-async function fetchLineup() {
+// Startlist (filtered by club) is the cheap way to learn our ClassNameShort + bib.
+async function fetchClassInfo() {
   const d = await getJSON(`${LIVE.base}/online_${LIVE.eventId}_startlist.json?ClubNameShort=${encodeURIComponent(LIVE.club)}`);
-  const teams = d.data || [];
-  const team = teams.find((t) => String(t.BaseBib ?? t.Bib) === String(LIVE.bib)) || teams[0] || null;
-  if (!team) return null;
-  // CONFIRM-WHEN-LIVE: per-leg runner shape (expected team.Races[] of OLRelayCompetitorRace)
-  const races = (team.Races || [])
-    .map((r) => ({ leg: r.RaceNo, name: [r.NameFirst, r.NameLast].filter(Boolean).join(" ").trim(), status: r.Status }))
-    .filter((r) => r.leg)
-    .sort((a, b) => a.leg - b.leg);
-  return { bib: team.BaseBib ?? team.Bib, classId: team.ClassID, classShort: team.ClassNameShort, races };
+  const rows = d.data || [];
+  const us = rows.find((r) => String(r.BaseBib ?? r.Bib) === String(LIVE.bib))
+    || rows.find((r) => (r.ClubNameLong || r.ClubNamePlain || "").toLowerCase().includes(LIVE.club.toLowerCase()))
+    || rows[0] || null;
+  return us ? { classShort: us.ClassNameShort, bib: us.BaseBib ?? us.Bib, starter: us.Name } : null;
 }
 
-async function fetchTeamStatus(classShort) {
-  // CONFIRM-WHEN-LIVE: exact class filter + that rows live under d.data
-  let url = `${LIVE.base}/online_${LIVE.eventId}_resultlist.json?a=${Date.now()}&Get=${encodeURIComponent('["OLBigRelayResult"]')}`;
+// Resultlist: RaceNo:0 team header, then RaceNo:1..N leg rows. Return OUR team's group.
+async function fetchTeamRows(classShort) {
+  let url = `${LIVE.base}/online_${LIVE.eventId}_resultlist.json?a=${Date.now()}&Point=0&Language=fi`;
   if (classShort) url += `&ClassNameShort=${encodeURIComponent(classShort)}`;
+  url += `&ClubNameShort=${encodeURIComponent(LIVE.club)}`; // honored if supported; harmless if ignored
   const d = await getJSON(url);
-  const rows = (d.data || []).filter((r) => String(r.BaseBib) === String(LIVE.bib));
-  if (!rows.length) return null;
-  rows.sort((a, b) => a.RaceNo - b.RaceNo || a.Point - b.Point);
-  const latest = rows[rows.length - 1];
-  const byLeg = {};
-  rows.forEach((r) => { byLeg[r.RaceNo] = r; });
+  let cur = null, ours = null;
+  for (const r of d.data || []) {
+    if (Number(r.RaceNo) === 0) {
+      cur = { bib: r.BaseBib ?? r.Bib, club: r.ClubNameLong || r.ClubNamePlain || "", legs: [] };
+      if (String(cur.bib) === String(LIVE.bib) || cur.club.toLowerCase().includes(LIVE.club.toLowerCase())) ours = cur;
+    } else if (cur) {
+      cur.legs.push({
+        leg: Number(r.RaceNo), name: r.Name || "",
+        legTime: r.RaceResult || "", rankRace: r.RaceRank || "",
+        totalTime: r.TotalResult || "", rankTotal: r.TotalRank || "", status: r.Status || "",
+      });
+    }
+  }
+  if (ours) ours.legs.sort((a, b) => a.leg - b.leg);
+  return ours;
+}
+
+// Derive the team's current position from its parsed leg rows.
+function deriveStatus(team) {
+  if (!team || !team.legs.length) return null;
+  const done = team.legs.filter((l) => /\d:\d\d/.test(l.totalTime));
+  const lastDone = done.length ? done[done.length - 1] : null;
+  const finished = done.length >= LIVE.legs;
+  const currentLeg = finished ? LIVE.legs : lastDone ? Math.min(lastDone.leg + 1, LIVE.legs) : 1;
+  const cur = team.legs.find((l) => l.leg === currentLeg) || {};
   return {
-    leg: latest.RaceNo, runner: latest.Name, point: latest.Point,
-    totalTime: latest.TimeTotalStr, rankTotal: latest.RankTotal, diffTotal: latest.DiffTotal,
-    legTime: latest.TimeRaceStr, rankRace: latest.RankRace, diffRace: latest.DiffRace,
-    legs: Object.values(byLeg),
+    leg: currentLeg, runner: cur.name || "", finished,
+    totalTime: lastDone ? lastDone.totalTime : "", rankTotal: lastDone ? lastDone.rankTotal : "",
+    lastLeg: lastDone ? lastDone.leg : 0, lastLegTime: lastDone ? lastDone.legTime : "", lastLegRank: lastDone ? lastDone.rankRace : "",
+    legs: team.legs,
   };
 }
 
@@ -921,13 +939,16 @@ function LiveView() {
     busy.current = true;
     try {
       const ev = await fetchEvent();
-      let lu = null;
-      try { lu = await fetchLineup(); } catch { /* lineup optional */ }
-      setLineup(lu);
+      let cls = null;
+      try { cls = await fetchClassInfo(); } catch { /* startlist may be empty pre-race */ }
+      let team = null;
+      try { team = await fetchTeamRows(cls?.classShort); } catch { /* resultlist may be empty */ }
+      const races = team && team.legs.length
+        ? team.legs.map((l) => ({ leg: l.leg, name: l.name }))
+        : cls?.starter ? [{ leg: 1, name: cls.starter }] : [];
+      setLineup(races.length ? { races } : null);
       if (isLiveNow(ev)) {
-        let st = null;
-        try { st = await fetchTeamStatus(lu?.classShort); } catch { /* may not be ready */ }
-        setStatus(st);
+        setStatus(deriveStatus(team));
         setPhase("live");
       } else {
         setPhase("pre");
@@ -947,6 +968,26 @@ function LiveView() {
     const t = setInterval(load, LIVE.refreshMs);
     return () => clearInterval(t);
   }, []);
+
+  const schedule = (() => {
+    const est = JUKOLA_ESTIMATES[2026];
+    if (!est) return [];
+    const byLeg = {};
+    (status?.legs || []).forEach((l) => { byLeg[l.leg] = l; });
+    let cum = 0;
+    return est.map((mins, i) => {
+      cum += mins * 60;
+      const leg = i + 1;
+      const actualS = parseHMS(byLeg[leg]?.totalTime);
+      const delta = actualS != null ? actualS - cum : null;
+      return {
+        leg, targetClock: clockAt(cum), legStr: hms(mins * 60),
+        actualClock: actualS != null ? clockAt(actualS) : null,
+        deltaStr: delta != null ? `${delta <= 0 ? "−" : "+"}${hms(Math.abs(delta))}` : null,
+        ahead: delta != null && delta <= 0,
+      };
+    });
+  })();
 
   return (
     <div className="stack">
@@ -974,28 +1015,47 @@ function LiveView() {
         </p>
       </section>
 
+      {schedule.length > 0 && (
+        <section className="panel">
+          <h2 className="h2">Tonight's target schedule</h2>
+          <p className="muted small">Jukola's official pace estimate for our 2026 course — the clock to race against. Mass start 23:00; an on-estimate run reaches the finish around 06:27.</p>
+          <div className="sched">
+            {schedule.map((r) => (
+              <div className="sched-row" key={r.leg}>
+                <div className="sched-leg">{r.leg === 7 ? "Finish" : `Leg ${r.leg}`}</div>
+                <div className="sched-clock mono">{r.targetClock}</div>
+                <div className="sched-est muted small">est {r.legStr}</div>
+                {r.actualClock
+                  ? <div className={`sched-delta mono ${r.ahead ? "up" : "down"}`}>{r.actualClock} · {r.deltaStr}</div>
+                  : <div className="sched-delta muted small">—</div>}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {phase === "live" && status && (
         <section className="panel">
           <h2 className="h2">On the course</h2>
           <div className="live-now">
-            <div className="ln-leg mono">LEG {status.leg}/{LIVE.legs}</div>
-            <div className="ln-runner">{status.runner || "—"}</div>
+            <div className="ln-leg mono">{status.finished ? "FINISHED" : `LEG ${status.leg}/${LIVE.legs}`}</div>
+            <div className="ln-runner">{status.finished ? "All legs done" : (status.runner || "—")}</div>
             <div className="ln-grid">
               <div><span className="ln-k">Total time</span><span className="ln-v mono">{status.totalTime || "—"}</span></div>
-              <div><span className="ln-k">Position</span><span className="ln-v mono">{status.rankTotal ?? "—"}</span></div>
-              <div><span className="ln-k">Gap to leader</span><span className="ln-v mono">{status.diffTotal || "—"}</span></div>
-              <div><span className="ln-k">Last point</span><span className="ln-v mono">{status.point ?? "—"}</span></div>
+              <div><span className="ln-k">Position</span><span className="ln-v mono">{status.rankTotal || "—"}</span></div>
+              <div><span className="ln-k">Last leg</span><span className="ln-v mono">{status.lastLeg ? `L${status.lastLeg} ${status.lastLegTime || ""}`.trim() : "—"}</span></div>
+              <div><span className="ln-k">Leg place</span><span className="ln-v mono">{status.lastLegRank ? `#${status.lastLegRank}` : "—"}</span></div>
             </div>
           </div>
           {status.legs && status.legs.length > 0 && (
             <div className="legs" style={{ marginTop: 14 }}>
               {status.legs.map((l) => (
-                <div className="leg" key={l.RaceNo}>
-                  <div className="leg-no mono">{l.RaceNo}</div>
-                  <div className="leg-runner" style={{ cursor: "default" }}>{l.Name || "—"}</div>
-                  <div className="leg-time mono">{l.TimeRaceStr || "—"}</div>
-                  <div className="leg-rank mono muted">{l.RankRace ? `#${l.RankRace}` : "—"}</div>
-                  <div className="leg-cum mono">{l.TimeTotalStr || "—"}</div>
+                <div className="leg" key={l.leg}>
+                  <div className="leg-no mono">{l.leg}</div>
+                  <div className="leg-runner" style={{ cursor: "default" }}>{l.name || "—"}</div>
+                  <div className="leg-time mono">{l.legTime || "—"}</div>
+                  <div className="leg-rank mono muted">{l.rankRace ? `#${l.rankRace}` : "—"}</div>
+                  <div className="leg-cum mono">{l.totalTime || "—"}</div>
                 </div>
               ))}
             </div>
@@ -1030,7 +1090,7 @@ function LiveView() {
 
       <p className="muted small" style={{ textAlign: "center" }}>
         Live data = split times at timing points and changeovers (not GPS), straight from{" "}
-        <a href={LIVE.resultsUrl} target="_blank" rel="noreferrer" style={{ color: "var(--yellow)" }}>online.jukola.fi</a>. Auto-refreshes every {Math.round(LIVE.refreshMs / 1000)}s.
+        <a href={LIVE.resultsUrl} target="_blank" rel="noreferrer" style={{ color: "var(--yellow)" }}>online.jukola.com</a>. Auto-refreshes every {Math.round(LIVE.refreshMs / 1000)}s.
       </p>
     </div>
   );
@@ -1367,6 +1427,14 @@ html,body{overflow-x:hidden;max-width:100%;background:var(--bg)}
 .s14-v{font-family:var(--disp);font-weight:800;font-size:34px;line-height:1;color:var(--yellow)}
 .s14-k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:8px}
 .night-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+.sched{display:flex;flex-direction:column;gap:6px;margin-top:10px}
+.sched-row{display:grid;grid-template-columns:64px 56px minmax(0,1fr) auto;align-items:center;gap:10px;padding:8px 10px;background:var(--panel2,rgba(255,255,255,.03));border-radius:8px}
+.sched-leg{font-weight:600}
+.sched-clock{color:#7fb6ff;font-size:1.05rem}
+.sched-est{justify-self:start}
+.sched-delta{justify-self:end;text-align:right}
+.sched-delta.up{color:var(--green,#4ade80)}
+.sched-delta.down{color:var(--red,#f87171)}
 .night-c{background:rgba(0,0,0,.16);border:1px solid var(--hair);border-radius:10px;padding:12px 5px;text-align:center}
 .night-t{font-size:16px;font-weight:600;color:var(--yellow)}
 .night-k{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.05em;margin-top:5px}
