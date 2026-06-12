@@ -159,7 +159,7 @@ const LIVE = {
   club: "Olvastin Tana",
   legs: 7,
   massStart: "2026-06-13T23:00:00+03:00",
-  refreshMs: 75000,
+  refreshMs: 120000,
   resultsUrl: "https://online3.jukola.com/tulokset-new/fi/j2026_ju/",
 };
 
@@ -932,10 +932,11 @@ function LiveView() {
   const [updated, setUpdated] = useState(null);
   const [err, setErr] = useState(null);
   const busy = useRef(false);
+  const stop = useRef(false); // once we finish all legs, quit polling the big feed
   const cd = useCountdown(LIVE.massStart);
 
   async function load() {
-    if (busy.current) return;
+    if (busy.current || stop.current) return;
     busy.current = true;
     try {
       const ev = await fetchEvent();
@@ -948,8 +949,10 @@ function LiveView() {
         : cls?.starter ? [{ leg: 1, name: cls.starter }] : [];
       setLineup(races.length ? { races } : null);
       if (isLiveNow(ev)) {
-        setStatus(deriveStatus(team));
+        const st = deriveStatus(team);
+        setStatus(st);
         setPhase("live");
+        if (st && st.finished) stop.current = true;
       } else {
         setPhase("pre");
       }
